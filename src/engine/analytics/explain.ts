@@ -5,7 +5,7 @@ import { formatINR } from '@/lib/money';
 import type { SpendingComparison } from './index';
 import { applyQuery } from './query';
 import { compareSpending } from './review';
-import { categoryResolver, contribution, isSpending, isUnclassifiedIn, isUnclassifiedOut, isWholeMonth } from './util';
+import { categoryResolver, contribution, isSpending, median, isUnclassifiedIn, isUnclassifiedOut, isWholeMonth } from './util';
 
 export interface MerchantChange {
   merchantKey: string;
@@ -31,6 +31,18 @@ export interface ChangeExplanation {
   headline: string;
   comparable: boolean;
   suggestedAction?: { category: string; suggestedTarget: Paise; label: string };
+  /**
+   * Drill-down figures behind the change. They describe the number of purchases, their average size, which
+   * merchants appeared or disappeared, one-off purchases and refunds. They never imply that prices changed.
+   */
+  drivers?: {
+    purchases: { current: number; previous: number };
+    averageSize: { current: Paise; previous: Paise };
+    merchantMix: { newMerchants: Paise; stoppedMerchants: Paise; newCount: number; stoppedCount: number };
+    /** Tagged planned/exceptional, or single purchases of at least 3x the median purchase of their category. */
+    oneOffs: { total: Paise; txnIds: string[] };
+    refunds: { current: Paise; previous: Paise };
+  };
 }
 
 const inr = (p: Paise): string => formatINR(Math.round(Math.abs(p)), { whole: true });
@@ -149,7 +161,7 @@ export function explainChange(
       ? `${scope} in ${comparison.current.label} is the same as in ${comparison.previous.label}.`
       : `${scope} in ${comparison.current.label} is ${inr(diff)} ${diff > 0 ? 'higher' : 'lower'} than in ${comparison.previous.label}${lead}.`;
 
-  const out: ChangeExplanation = { comparison, merchants, headline, comparable: comparison.comparable };
+  const out: ChangeExplanation = { comparison, merchants, headline, comparable: comparison.comparable, drivers: driversOf(txns, comparison, cur, prev, catOf, ctx.category) };
   const target = ctx.category ?? comparison.steps.find((s) => s.delta > 0)?.category;
   if (comparison.comparable && target && isWholeMonth(comparison.previous.start, comparison.previous.end)) {
     const base = ctx.category ? prevTotal : categoryTotal(target, txns, comparison.previous, catOf);
@@ -169,4 +181,56 @@ function sumTotals(m: Map<string, Agg>): Paise {
 /** Previous-period spending in one category (all merchants, unclassified people flows excluded). */
 function categoryTotal(category: string, txns: readonly Transaction[], range: { start: IsoDate; end: IsoDate }, catOf: (t: Transaction) => string): Paise {
   return sumTotals(aggregate(applyQuery(txns, range), catOf, category));
+}
+
+function driversOf(
+  txns: readonly Transaction[],
+  comparison: SpendingComparison,
+  cur: Map<string, Agg>,
+  prev: Map<string, Agg>,
+  catOf: (t: Transaction) => string,
+  category?: string,
+): NonNullable<ChangeExplanation['drivers']> {
+  const count = (m: Map<string, Agg>): number => [...m.values()].reduce((n, a) => n + a.n, 0);
+  const gross = (m: Map<string, Agg>): Paise => [...m.values()].reduce((n, a) => n + a.total, 0);
+  const n1 = count(cur);
+  const n0 = count(prev);
+  let newMerchants = 0;
+  let stoppedMerchants = 0;
+  let newCount = 0;
+  let stoppedCount = 0;
+  for (const [k, a] of cur) {
+    if (prev.has(k) || a.n === 0) continue;
+    newMerchants += a.total;
+    newCount++;
+  }
+  for (const [k, a] of prev) {
+    if (cur.has(k) || a.n === 0) continue;
+    stoppedMerchants += a.total;
+    stoppedCount++;
+  }
+
+  const scoped = (range: { start: IsoDate; end: IsoDate }): Transaction[] =>
+    applyQuery(txns, range).filter((t) => isSpending(t) && !isUnclassifiedOut(t) && !isUnclassifiedIn(t) && (!category || catOf(t) === category));
+  const curTx = scoped(comparison.current);
+  const prevTx = scoped(comparison.previous);
+  const byCat = new Map<string, number[]>();
+  for (const t of [...curTx, ...prevTx]) {
+    if (t.direction !== 'debit') continue;
+    const c = catOf(t);
+    byCat.set(c, [...(byCat.get(c) ?? []), t.amount]);
+  }
+  const medians = new Map<string, number>();
+  for (const [c, list] of byCat) if (list.length >= 3) medians.set(c, median(list));
+  const one = curTx.filter(
+    (t) => t.direction === 'debit' && (t.tag === 'planned' || t.tag === 'exceptional' || t.amount >= 3 * (medians.get(catOf(t)) ?? Infinity)),
+  );
+  const refunds = (list: Transaction[]): Paise => list.filter((t) => t.direction === 'credit').reduce((n, t) => n + t.amount, 0);
+  return {
+    purchases: { current: n1, previous: n0 },
+    averageSize: { current: n1 > 0 ? Math.round(gross(cur) / n1) : 0, previous: n0 > 0 ? Math.round(gross(prev) / n0) : 0 },
+    merchantMix: { newMerchants, stoppedMerchants, newCount, stoppedCount },
+    oneOffs: { total: one.reduce((n, t) => n + t.amount, 0), txnIds: one.map((t) => t.id) },
+    refunds: { current: refunds(curTx), previous: refunds(prevTx) },
+  };
 }

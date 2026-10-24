@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, ClipboardCheck, GraduationCap } from 'lucide-react';
 import { useBudgets, useRecurringDecisions, useSavingActions } from '@/db/hooks';
+import { useInsightFeedback, useMonthReviews } from '@/db/review';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
 import { useScopedLedger } from '@/app/scope';
-import { ROUTES, activityLink, exploreLink } from '@/app/routes';
+import { ROUTES, activityLink, exploreLink, reviewLink } from '@/app/routes';
 import {
   applyQuery,
   categoryBaselines,
@@ -19,7 +20,7 @@ import {
   upcomingCardDues,
   type Insight,
 } from '@/engine/analytics';
-import { daysInMonth, monthKey, todayIso } from '@/lib/dates';
+import { daysInMonth, formatMonth, monthKey, todayIso } from '@/lib/dates';
 import { Card, CardHeader, Notice, Skeleton, useToast } from '@/ui';
 import { buildCommitments } from './commitments';
 import { CommitmentTimeline } from './CommitmentTimeline';
@@ -46,6 +47,8 @@ export default function OverviewPage() {
   const budgets = useBudgets();
   const decisions = useRecurringDecisions();
   const actions = useSavingActions();
+  const insightFeedback = useInsightFeedback();
+  const reviews = useMonthReviews();
   const { period } = usePeriod();
   const { toast } = useToast();
   const today = useMemo(() => todayIso(), []);
@@ -99,12 +102,13 @@ export default function OverviewPage() {
             budgets: budgets ?? [],
             recurringDecisions: decisions ?? [],
             actions: actions ?? [],
+            feedback: insightFeedback ?? [],
             start: period.start,
             end: period.end,
             today,
           })
         : [],
-    [insightsReady, transactions, accounts, statements, budgets, decisions, actions, period.start, period.end, today],
+    [insightsReady, transactions, accounts, statements, budgets, decisions, actions, insightFeedback, period.start, period.end, today],
   );
   const baselines = useMemo(
     () => (hasData ? categoryBaselines(transactions, { accounts, statements, today, months: 3 }) : []),
@@ -138,6 +142,9 @@ export default function OverviewPage() {
   const firstRun = ready && transactions.length === 0;
   const periodEmpty = hasData && periodTxns.length === 0;
   const firstInsight = insights.slice(0, 1);
+  const reviewMonth = status?.latestCompleteMonth ?? null;
+  const monthReview = reviews?.find((r) => r.month === reviewMonth);
+  const reviewDue = reviewMonth !== null && reviews !== undefined && monthReview?.status !== 'completed';
   const needsReview = status?.needsReview ?? 0;
   const accountsLabel = `${status?.accountCount ?? 0} ${status?.accountCount === 1 ? 'account' : 'accounts'}`;
 
@@ -194,13 +201,28 @@ export default function OverviewPage() {
                 </div>
 
                 <div className="space-y-4">
-                  {firstInsight.length > 0 ? (
+                  {reviewDue && reviewMonth ? (
+                    <Card>
+                      <CardHeader title="Your next review" subtitle={`${formatMonth(reviewMonth)} is complete`} />
+                      <p className="text-sm text-fg-muted">
+                        {monthReview?.status === 'in_progress'
+                          ? 'You started this review. Pick up where you left off.'
+                          : 'A five-step review turns the month into a plan for the next one: check the data, see what changed, choose one adjustment.'}
+                      </p>
+                      <div className="mt-3">
+                        <LinkButton to={reviewLink(reviewMonth)} variant="primary">
+                          {monthReview?.status === 'in_progress' ? 'Continue review' : 'Start review'}
+                        </LinkButton>
+                      </div>
+                    </Card>
+                  ) : firstInsight.length > 0 ? (
                     <InsightsSection
                       insights={firstInsight}
                       actions={actions ?? []}
                       baselines={baselines}
                       customCategories={customCategories}
                       today={today}
+                      feedback={insightFeedback ?? []}
                       title="Your next step"
                       subtitle="The most useful thing to look at right now"
                     />

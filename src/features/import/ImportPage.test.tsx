@@ -118,9 +118,9 @@ function pdf(name = 'demo.pdf') {
   return new File([new Uint8Array([37, 80, 68, 70])], name, { type: 'application/pdf' });
 }
 
-function renderPage() {
+function renderPage(url = '/') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[url]}>
       <ImportPage />
     </MemoryRouter>,
   );
@@ -677,6 +677,65 @@ describe('ImportPage', () => {
       const section = await screen.findByRole('region', { name: 'Possible transfers' });
       expect(within(section).getByText('Demo Card')).toBeInTheDocument();
       expect(within(section).getByText(/Looks like a card bill payment: same amount, opposite direction, 2 days apart/)).toBeInTheDocument();
+    });
+  });
+  describe('receipt and grouping', () => {
+    it('opens the review with a receipt of what was understood and what needs attention', async () => {
+      const user = userEvent.setup();
+      const base = makePreview();
+      const rows = base.rows.map((r) => ({ ...r }));
+      rows[0] = { ...rows[0], row: { ...rows[0].row, warnings: ['balance_break' as const] } };
+      rows[2] = { ...rows[2], understanding: { ...rows[2].understanding, needsReview: true } };
+      mocks.prepareImport.mockResolvedValue({ ...base, rows });
+      renderPage();
+      await pick(user);
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+
+      const receipt = await screen.findByRole('region', { name: 'Statement summary' });
+      expect(within(receipt).getByText('Statement ready for review')).toBeInTheDocument();
+      expect(within(receipt).getByText('Account identified')).toBeInTheDocument();
+      expect(within(receipt).getByText('Period identified')).toBeInTheDocument();
+      expect(within(receipt).getByText('Totals checked')).toBeInTheDocument();
+      expect(within(receipt).getByText('2 new · 1 already imported · 2 need your attention')).toBeInTheDocument();
+      // The receipt comes first, before the impact sections.
+      const all = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'));
+      expect(all.indexOf('Statement summary')).toBeLessThan(all.indexOf('Amounts to resolve'));
+    });
+
+    it('flags what could not be confirmed', async () => {
+      const user = userEvent.setup();
+      const base = makePreview();
+      mocks.prepareImport.mockResolvedValue({
+        ...base,
+        parsed: { ...base.parsed, periodStart: undefined, periodEnd: undefined, reconciliation: { status: 'unverified', checks: [], rowBalanceBreaks: 0 } },
+      });
+      renderPage();
+      await pick(user);
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+      const receipt = await screen.findByRole('region', { name: 'Statement summary' });
+      expect(within(receipt).getByText('Period not found')).toBeInTheDocument();
+      expect(within(receipt).getByText('Totals could not be checked')).toBeInTheDocument();
+    });
+
+    it('groups category questions that share a merchant', async () => {
+      const user = userEvent.setup();
+      const base = makePreview();
+      const same = (r: (typeof base.rows)[number]) => ({
+        ...r,
+        understanding: { ...r.understanding, merchant: 'Chai Point', merchantKey: 'chai point', needsReview: true },
+      });
+      mocks.prepareImport.mockResolvedValue({ ...base, rows: [same(base.rows[0]), base.rows[1], same(base.rows[2])] });
+      renderPage();
+      await pick(user);
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+      const groups = await screen.findByRole('region', { name: 'Review similar transactions together' });
+      expect(within(groups).getByText('Chai Point')).toBeInTheDocument();
+      expect(within(groups).getByText(/2 transactions/)).toBeInTheDocument();
+    });
+
+    it('shows the missing-month hint when sent here from the coverage grid', () => {
+      renderPage('/import?account=acc1&month=2026-08');
+      expect(screen.getByText('Import your Demo Savings ••1234 statement for August 2026')).toBeInTheDocument();
     });
   });
 });

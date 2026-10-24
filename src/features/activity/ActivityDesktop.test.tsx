@@ -22,6 +22,7 @@ vi.mock('@/db/hooks', () => ({
   useSettings: () => ({ p2pReviewThreshold: 500_000 }),
 }));
 vi.mock('@/db/actions', () => ({}));
+vi.mock('@/db/review', () => ({ useTransactionHistory: () => [], setTransactionsTag: vi.fn(), mergeMerchants: vi.fn() }));
 vi.mock('@/engine/analytics', () => ({
   applyQuery: (t: Transaction[]) => t,
   detectRecurring: () => [],

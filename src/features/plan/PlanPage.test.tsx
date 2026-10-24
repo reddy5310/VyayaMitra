@@ -316,6 +316,18 @@ describe('Scenario editor', () => {
     );
   });
 
+  it('puts the planned difference toward a chosen goal as a goal_contribution action', async () => {
+    hooks.useGoals.mockReturnValue([goal]);
+    actions.createSavingAction.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=budgets&scenario=1');
+    await user.selectOptions(screen.getByLabelText('Put the difference toward a goal'), 'g1');
+    await user.click(screen.getByRole('button', { name: 'Plan this contribution' }));
+    expect(actions.createSavingAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'goal_contribution', goalId: 'g1', targetMonthly: 200_000, status: 'active' }),
+    );
+  });
+
   it('rejects an invalid scenario amount inline and blocks saving', async () => {
     const user = userEvent.setup();
     renderPlan('/plan?tab=budgets&scenario=1');
@@ -486,8 +498,9 @@ describe('Saving actions', () => {
     hooks.useSavingActions.mockReturnValue([action]);
     analytics.evaluateSavingActions.mockReturnValue([outcome({})]);
     renderPlan('/plan?tab=actions');
-    expect(screen.getAllByText('Potential').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Planned').length).toBeGreaterThan(0);
+    expect(screen.getByText('1 · Opportunity')).toBeInTheDocument();
+    expect(screen.getByText('2 · Planned adjustment')).toBeInTheDocument();
+    expect(screen.getByText('3 · Recorded result')).toBeInTheDocument();
     expect(screen.getAllByText('Waiting for a full month of data').length).toBeGreaterThan(0);
     expect(screen.queryByText(/a month lower/)).not.toBeInTheDocument();
   });

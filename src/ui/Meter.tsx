@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { formatINR } from '@/lib/money';
 import { cn, type Tone } from './primitives';
+import { useAmountFormatter } from './privacy';
 
 const FILL: Record<Tone, string> = {
   neutral: 'bg-fg-subtle',
@@ -25,7 +26,7 @@ export function MeterBar({
   target,
   expected,
   label,
-  format = (n: number) => formatINR(n, { whole: true }),
+  format: formatValue = (n: number) => formatINR(n, { whole: true }),
   tone = 'neutral',
   showText = true,
   className,
@@ -41,12 +42,16 @@ export function MeterBar({
   showText?: boolean;
   className?: string;
 }) {
+  const mask = useAmountFormatter();
+  const format = (n: number) => mask(formatValue(n));
   const safeTarget = Math.max(target, 0);
   const over = Math.max(0, value - safeTarget);
   const max = Math.max(value, safeTarget, expected ?? 0, 1);
   const pct = (n: number) => `${Math.min(100, Math.max(0, (n / max) * 100))}%`;
   const within = Math.min(value, safeTarget);
-  const text = `${format(value)} of ${format(safeTarget)}${over > 0 ? `, ${format(over)} over` : ''}`;
+  const overPct = safeTarget > 0 ? Math.round((over / safeTarget) * 100) : 0;
+  const overText = over > 0 ? `${overPct > 0 ? `${overPct}% over · ` : ''}${format(over)} over` : '';
+  const text = `${format(value)} of ${format(safeTarget)}${over > 0 ? `, ${overText}` : ''}`;
   const fill: Tone = tone === 'neutral' ? 'primary' : tone;
   return (
     <div className={cn('w-full', className)}>

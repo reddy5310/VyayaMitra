@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { addDays, addMonths, daysBetween, formatDate, formatMonth, minIso, monthEnd, monthKey, monthStart } from '@/lib/dates';
 import { ArrowRight, Target } from 'lucide-react';
@@ -31,6 +31,92 @@ interface Bar {
 }
 
 const sign = (n: number) => (n >= 0 ? '+' : '−');
+/** Direction glyph; changes are never coloured as good or bad. */
+const Glyph = ({ n }: { n: number }) => <span aria-hidden>{n >= 0 ? '▲ ' : '▼ '}</span>;
+
+type Drivers = NonNullable<analytics.ChangeExplanation['drivers']>;
+
+function DriversSection({ drivers }: { drivers: Drivers }) {
+  const { purchases, averageSize, merchantMix, oneOffs, refunds } = drivers;
+  const rows: { key: string; node: ReactNode; to?: string }[] = [];
+  const d = purchases.current - purchases.previous;
+  rows.push({
+    key: 'purchases',
+    node: (
+      <>
+        Purchases: {purchases.current} against {purchases.previous} (<Glyph n={d} />
+        {sign(d)}
+        {Math.abs(d)})
+      </>
+    ),
+  });
+  if (purchases.current > 0 && purchases.previous > 0) {
+    const a = averageSize.current - averageSize.previous;
+    rows.push({
+      key: 'avg',
+      node: (
+        <>
+          {a === 0 ? 'Each purchase was about the same size on average' : `Each purchase was ${a > 0 ? 'larger' : 'smaller'} on average`}:{' '}
+          <Money value={averageSize.current} whole /> against <Money value={averageSize.previous} whole />
+        </>
+      ),
+    });
+  }
+  if (merchantMix.newCount > 0 || merchantMix.stoppedCount > 0) {
+    rows.push({
+      key: 'mix',
+      node: (
+        <>
+          {merchantMix.newCount} new merchant{merchantMix.newCount === 1 ? '' : 's'} (<Money value={merchantMix.newMerchants} whole />),{' '}
+          {merchantMix.stoppedCount} you stopped using (<Money value={merchantMix.stoppedMerchants} whole />)
+        </>
+      ),
+    });
+  }
+  if (refunds.current > 0 || refunds.previous > 0) {
+    rows.push({
+      key: 'refunds',
+      node: (
+        <>
+          Refunds: <Money value={refunds.current} whole /> against <Money value={refunds.previous} whole />
+        </>
+      ),
+    });
+  }
+  if (oneOffs.total > 0) {
+    rows.push({
+      key: 'oneoffs',
+      node: (
+        <>
+          One-off or tagged expenses: <Money value={oneOffs.total} whole /> ({oneOffs.txnIds.length} transaction{oneOffs.txnIds.length === 1 ? '' : 's'})
+        </>
+      ),
+      to: oneOffs.txnIds.length ? activityLink({ ids: oneOffs.txnIds }) : undefined,
+    });
+  }
+  if (rows.length === 0) return null;
+  return (
+    <section aria-labelledby="what-drove-it" className="rounded-2xl border border-border bg-surface p-4 shadow-card sm:p-5">
+      <h2 id="what-drove-it" className="text-base font-semibold text-fg">
+        What drove it
+      </h2>
+      <ul className="mt-2 divide-y divide-border text-sm">
+        {rows.map((r) => (
+          <li key={r.key}>
+            {r.to ? (
+              <Link to={r.to} className="flex min-h-touch items-center justify-between gap-2 py-2 hover:bg-surface-2">
+                <span>{r.node}</span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-label="See transactions" />
+              </Link>
+            ) : (
+              <p className="py-2">{r.node}</p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 export default function CompareView() {
   const fmt = useFmt();
@@ -120,7 +206,7 @@ export default function CompareView() {
                       b.label
                     )}
                   </td>
-                  <td className={tableNum}>{b.total ? '' : `${sign(b.delta ?? 0)}${fmt(Math.abs(b.delta ?? 0))}`}</td>
+                  <td className={tableNum}>{b.total ? '' : `${(b.delta ?? 0) >= 0 ? '▲' : '▼'} ${sign(b.delta ?? 0)}${fmt(Math.abs(b.delta ?? 0))}`}</td>
                   <td className={tableNum}>{fmt(b.to)}</td>
                 </tr>
               ))}
@@ -132,7 +218,8 @@ export default function CompareView() {
           <>
             <p className="mb-3 text-sm text-fg-muted">
               Total change{' '}
-              <span className={cn('font-semibold tabular-nums', diff > 0 ? 'text-negative' : 'text-positive')}>
+              <span className="font-semibold tabular-nums text-fg">
+                <Glyph n={diff} />
                 {sign(diff)}
                 <Money value={Math.abs(diff)} whole />
               </span>{' '}
@@ -146,11 +233,12 @@ export default function CompareView() {
                   <>
                     <span className="flex items-baseline justify-between gap-2 text-sm">
                       <span className="truncate font-medium text-fg">{b.label}</span>
-                      <span className={cn('shrink-0 tabular-nums', b.total ? 'text-fg' : (b.delta ?? 0) > 0 ? 'text-negative' : 'text-positive')}>
+                      <span className="shrink-0 tabular-nums text-fg">
                         {b.total ? (
                           <Money value={b.to} whole />
                         ) : (
                           <>
+                            <Glyph n={b.delta ?? 0} />
                             {sign(b.delta ?? 0)}
                             <Money value={Math.abs(b.delta ?? 0)} whole />
                           </>
@@ -209,6 +297,8 @@ export default function CompareView() {
         )}
       </ChartFrame>
 
+      {comparable && exp.drivers && <DriversSection drivers={exp.drivers} />}
+
       {comparable && exp.merchants.length > 0 && (
         <section aria-labelledby="merchant-drivers" className="rounded-2xl border border-border bg-surface p-4 shadow-card sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -223,24 +313,26 @@ export default function CompareView() {
           </div>
           <ol aria-label="Merchants driving the change" className="mt-2 divide-y divide-border">
             {exp.merchants.map((m) => {
-              const ids = [...m.txnIdsCurrent, ...m.txnIdsPrevious];
+              const mids = [...m.txnIdsCurrent, ...m.txnIdsPrevious];
               const dCount = m.current.count - m.previous.count;
               return (
                 <li key={`${m.category}:${m.merchant}`}>
                   <Link
-                    to={activityLink({ ids })}
+                    to={activityLink({ ids: mids })}
                     aria-label={`${m.merchant}: ${mask(m.sentence)} See transactions`}
                     className="block min-h-touch rounded-xl px-1 py-2 hover:bg-surface-2 focus-visible:outline focus-visible:outline-2"
                   >
                     <span className="flex items-baseline justify-between gap-2 text-sm">
                       <span className="truncate font-medium text-fg">{m.merchant}</span>
-                      <span className={cn('shrink-0 tabular-nums', m.delta > 0 ? 'text-negative' : 'text-positive')}>
+                      <span className="shrink-0 tabular-nums text-fg">
+                        <Glyph n={m.delta} />
                         {sign(m.delta)}
                         <Money value={Math.abs(m.delta)} whole />
                       </span>
                     </span>
                     <span className="mt-0.5 block text-sm text-fg-muted">{mask(m.sentence)}</span>
                     <span className="mt-0.5 block text-xs tabular-nums text-fg-muted">
+                      <Glyph n={dCount} />
                       {sign(dCount)}
                       {Math.abs(dCount)} order{Math.abs(dCount) === 1 ? '' : 's'} <Money value={Math.abs(m.frequencyEffect)} whole /> · {m.sizeEffect >= 0 ? 'larger' : 'smaller'} orders{' '}
                       <Money value={Math.abs(m.sizeEffect)} whole />

@@ -196,9 +196,14 @@ export interface Transaction {
   fingerprint: string;
   source: SourceRef;
   note?: string;
+  /** User's label for a large or unusual expense: it stays in totals but stops raising generic alerts. */
+  tag?: ExpenseTag;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
+
+/** planned = expected (holiday, annual fee); exceptional = one-off (medical); reimbursable = money expected back. */
+export type ExpenseTag = 'planned' | 'exceptional' | 'reimbursable';
 
 // ─── Statements / import batches ─────────────────────────────────────────────
 
@@ -387,7 +392,7 @@ export interface FeedbackEvent {
   txnId: string;
   merchantKey: string;
   vpa?: string;
-  action: 'category' | 'kind' | 'merchant' | 'confirm' | 'reset';
+  action: 'category' | 'kind' | 'merchant' | 'confirm' | 'reset' | 'tag';
   scope: 'this' | 'merchant';
   /** The automatic decision before the user acted. */
   before: { kind: TxnKind; category: string; categorySource: CategorySource; kindSource: KindSource; confidence: number };
@@ -408,7 +413,8 @@ export interface UserRule {
   accountId?: string;
   /** Restrict to one direction; omitted = both. */
   direction?: Direction;
-  set: { category?: string; kind?: TxnKind; merchant?: string };
+  /** merchantKey: merchant alias — matching rows are grouped under this key (combine inconsistent names). */
+  set: { category?: string; kind?: TxnKind; merchant?: string; merchantKey?: string };
   createdFromTxnId?: string;
   enabled: boolean;
   createdAt: Timestamp;
@@ -516,4 +522,27 @@ export interface AppSettings {
   /** p2p_out at or above this many paise are flagged for review. Default ₹5,000. */
   p2pReviewThreshold: Paise;
   onboardingDone: boolean;
+}
+
+// ─── Review workspace ────────────────────────────────────────────────────────
+
+/** What the user said about an insight. `key` is stable across periods (type + subject, e.g. "category_change:food_dining"). */
+export interface InsightFeedback {
+  id: string;
+  key: string;
+  insightId: string;
+  action: 'dismissed' | 'expected' | 'irrelevant';
+  at: Timestamp;
+}
+
+/** The month-end review ritual for one calendar month. */
+export interface MonthReview {
+  month: MonthKey;
+  status: 'in_progress' | 'completed';
+  /** Plain notes the user wrote or accepted ("Holiday in Goa was planned"). */
+  notes: string[];
+  /** SavingAction ids chosen as next month's adjustments. */
+  nextActionIds: string[];
+  completedAt?: Timestamp;
+  updatedAt: Timestamp;
 }

@@ -78,6 +78,7 @@ export function fakeUnderstand(input: UnderstandInput, ctx: UnderstandContext): 
       u.kindSource = 'user_rule';
     }
     if (rule.set.merchant) u.merchant = rule.set.merchant;
+    if (rule.set.merchantKey) u.merchantKey = rule.set.merchantKey;
   }
   return u;
 }

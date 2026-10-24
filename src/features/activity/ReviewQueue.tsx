@@ -3,7 +3,7 @@ import { CheckCircle2, SkipForward, Sparkles } from 'lucide-react';
 import { markReviewed } from '@/db/actions';
 import { categoryName } from '@/domain/categories';
 import { KIND_LABELS } from '@/domain/kinds';
-import type { CustomCategory, Transaction } from '@/domain/types';
+import type { CustomCategory, ExpenseTag, Transaction } from '@/domain/types';
 import { reviewPriority, type CategorySuggestion, type ReviewItem } from '@/engine/understand';
 import { formatDate } from '@/lib/dates';
 import { Badge, Button, Card, CategoryIcon, EmptyState, Money, Notice, ProgressBar, SegmentedControl, useToast } from '@/ui';
@@ -11,6 +11,8 @@ import { CorrectionPrompt } from './CorrectionPrompt';
 import { categorySourceLabel, percentText } from './labels';
 import { popularCategories } from './popularCategories';
 import { groupKey, isExtractionIssue } from './reviewKinds';
+import { useTagging } from './tagging';
+import { TagSelect } from './TxnExtras';
 import { errorMessage, useCorrection, type PendingChange } from './useCorrection';
 
 interface QueueEntry {
@@ -263,6 +265,7 @@ function GroupCard({
   onOpen: (id: string) => void;
 }) {
   const { toast } = useToast();
+  const tagTransactions = useTagging();
   const lead = rows[0];
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(rows.map((r) => r.id)));
@@ -369,6 +372,20 @@ function GroupCard({
             </li>
           ))}
         </ul>
+        <div className="mt-2">
+          <p className="mb-1 text-xs text-fg-muted">Tag the {selectedIds.length} selected</p>
+          {(() => {
+            const picked = rows.filter((r) => selected.has(r.id));
+            const tags = new Set(picked.map((r) => r.tag ?? ''));
+            return (
+              <TagSelect
+                label="Tag selected transactions"
+                current={tags.size === 1 ? ([...tags][0] as ExpenseTag | '') : 'mixed'}
+                onPick={(tag) => void tagTransactions(picked, tag)}
+              />
+            );
+          })()}
+        </div>
         {rows.length > PREVIEW_ROWS && (
           <Button size="sm" variant="ghost" className="mt-1" onClick={() => setShowAll((v) => !v)}>
             {showAll ? 'Show fewer' : `Show all ${rows.length}`}

@@ -22,6 +22,7 @@ import type {
   Transaction,
   TxnKind,
 } from '@/domain/types';
+import type { ExpenseTag, InsightFeedback } from '@/domain/types';
 import type { MetricBucket } from '@/domain/kinds';
 
 // ─── The one filter contract ─────────────────────────────────────────────────
@@ -226,6 +227,9 @@ export interface BudgetStatus {
   /** Where spending "should" be by `today` if spread evenly (only for the current month). */
   expectedByToday?: Paise;
   state: 'ok' | 'watch' | 'over';
+  /** Only when spent > limit: how far over, in paise and as a percentage of the limit. */
+  overBy?: Paise;
+  overPct?: number;
   /** Coverage of this month for accounts that carry this category. */
   coverageComplete: boolean;
   txnIds: string[];
@@ -257,6 +261,8 @@ export type InsightSeverity = 'positive' | 'info' | 'warning' | 'critical';
 export interface Insight {
   /** Stable across renders for the same subject + period (used to link SavingAction.insightId). */
   id: string;
+  /** Stable across periods: type + subject (e.g. "category_change:food_dining"). Used for dismiss/expected/irrelevant feedback. */
+  key?: string;
   type:
     | 'category_change'
     | 'spending_change'
@@ -298,6 +304,8 @@ export interface InsightInput {
   budgets: readonly Budget[];
   recurringDecisions: readonly RecurringDecision[];
   actions: readonly SavingAction[];
+  /** User feedback; dismissed/expected insight ids are hidden, irrelevant keys never shown again. */
+  feedback?: readonly InsightFeedback[];
   /** Period being viewed. */
   start: IsoDate;
   end: IsoDate;
@@ -480,6 +488,37 @@ export interface CardCycle {
   txnIds: string[];
 }
 export type { MerchantChange, ChangeExplanation } from './explain';
+import type { ChangeExplanation } from './explain';
 export { explainChange } from './explain';
 export type { ScenarioResult } from './scenario';
 export { planScenario } from './scenario';
+
+// ─── Wave 7: month-end review (contract) ─────────────────────────────────────
+
+export interface MonthReviewData {
+  month: MonthKey;
+  /** Step 1–2: can this month be reviewed honestly? */
+  readiness: {
+    coverageComplete: boolean;
+    /** Plain sentences, e.g. "No HDFC Savings statement covers 1–30 Sep 2026". */
+    missing: string[];
+    needsReview: number;
+    extractionIssues: number;
+  };
+  /** Step 3: what changed vs the previous month (or equivalent days). null when no previous data. */
+  changes: ChangeExplanation | null;
+  /** Expenses the user tagged, kept in totals but not alarming. */
+  tagged: { total: Paise; byTag: Partial<Record<ExpenseTag, Paise>>; txnIds: string[] };
+  /** Insights the user marked as expected this month. */
+  expectedInsightIds: string[];
+  /** Step 4: did last month's chosen adjustments hold? */
+  actions: ActionOutcome[];
+  /** Plan status for the month (budgets). */
+  budgets: BudgetStatus[];
+  /** What is still uncertain, as sentences. */
+  uncertain: string[];
+  /** Step 5: candidate adjustments for next month (from insights, never more than 3). */
+  suggestions: Insight[];
+}
+
+export { monthReviewData } from './monthReview';

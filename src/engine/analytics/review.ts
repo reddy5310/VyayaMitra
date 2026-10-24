@@ -61,7 +61,7 @@ function coveredPredicate(
 // ─── dataStatus ──────────────────────────────────────────────────────────────
 
 /** Rows flagged for review whose reasons talk about balances, ambiguous amounts or inferred direction. */
-const EXTRACTION_RE = /balance|ambiguous|direction|amount/i;
+export const EXTRACTION_RE = /balance|ambiguous|direction|amount/i;
 
 /**
  * extractionIssues = rows with needsReview whose reviewReasons mention a balance break, an ambiguous

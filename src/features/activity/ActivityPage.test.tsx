@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   summarize: vi.fn(),
   reviewPriority: vi.fn(),
   detectRecurring: vi.fn(),
+  useTransactionHistory: vi.fn(),
+  setTransactionsTag: vi.fn(),
+  mergeMerchants: vi.fn(),
   deleteRule: vi.fn(),
   suggestCategories: vi.fn(),
   setTransactionCategory: vi.fn(),
@@ -40,6 +43,11 @@ vi.mock('@/db/hooks', () => ({
   useRules: () => [],
   useRecurringDecisions: () => [],
   useSettings: () => ({ p2pReviewThreshold: 500_000 }),
+}));
+vi.mock('@/db/review', () => ({
+  useTransactionHistory: mocks.useTransactionHistory,
+  setTransactionsTag: mocks.setTransactionsTag,
+  mergeMerchants: mocks.mergeMerchants,
 }));
 vi.mock('@/db/actions', () => ({
   setTransactionCategory: mocks.setTransactionCategory,
@@ -107,6 +115,7 @@ beforeEach(() => {
   );
   mocks.suggestCategories.mockReturnValue([]);
   mocks.detectRecurring.mockReturnValue([]);
+  mocks.useTransactionHistory.mockReturnValue([]);
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -435,6 +444,100 @@ describe('ActivityPage', () => {
       await user.click(await screen.findByRole('button', { name: 'Undo' }));
       await waitFor(() => expect(mocks.resetTransaction).toHaveBeenCalledWith('b'));
       expect(mocks.setTransactionCategory).toHaveBeenCalledWith('a', 'groceries', 'this');
+    });
+  });
+  describe('state chips, history, tags and merging', () => {
+    const balanced = makeStatement({ reconciliation: { status: 'balanced', checks: [], rowBalanceBreaks: 0 } });
+    const open = async (target: Transaction, others: Transaction[] = []) => {
+      mocks.useLedger.mockReturnValue({ ready: true, accounts: [account], statements: [balanced], transactions: [target, ...others], customCategories: [] });
+      mocks.useTransaction.mockImplementation((id?: string) => (id === target.id ? target : undefined));
+      renderPage(`/activity?txn=${target.id}`);
+      return screen.findByRole('dialog');
+    };
+
+    it('shows separate state chips instead of one confidence number', async () => {
+      const auto = swiggy({ id: 'T', categorySource: 'builtin_rule' });
+      const dialog = await open(auto);
+      const chips = within(within(dialog).getByRole('list', { name: /status of this transaction/i }));
+      expect(chips.getByText('Imported')).toBeInTheDocument();
+      expect(chips.getByText('Reconciled')).toBeInTheDocument();
+      expect(chips.getByText('Categorized')).toBeInTheDocument();
+      expect(chips.getByText('Not reviewed')).toBeInTheDocument();
+      expect(chips.queryByText('Estimated')).not.toBeInTheDocument();
+      expect(chips.queryByText('Incomplete')).not.toBeInTheDocument();
+    });
+
+    it('marks user decisions as reviewed and doubtful rows as estimated and incomplete', async () => {
+      const t = swiggy({
+        id: 'T',
+        categorySource: 'user_txn',
+        needsReview: true,
+        reasons: ['Direction worked out from the running balance'],
+        reviewReasons: ['Running balance does not match this row'],
+      });
+      const dialog = await open(t);
+      const chips = within(within(dialog).getByRole('list', { name: /status of this transaction/i }));
+      expect(chips.getByText('Reviewed')).toBeInTheDocument();
+      expect(chips.getByText('Estimated')).toBeInTheDocument();
+      expect(chips.getByText('Incomplete')).toBeInTheDocument();
+    });
+
+    it('lists the correction history with what changed and the scope', async () => {
+      mocks.useTransactionHistory.mockReturnValue([
+        {
+          id: 'e1',
+          at: '2025-09-02T10:00:00.000Z',
+          txnId: 'T',
+          merchantKey: 'swiggy',
+          action: 'category',
+          scope: 'merchant',
+          before: { kind: 'expense', category: 'groceries', categorySource: 'builtin_rule', kindSource: 'rule', confidence: 0.5 },
+          after: { kind: 'expense', category: 'food_dining' },
+        },
+      ]);
+      const dialog = await open(swiggy({ id: 'T' }));
+      const history = within(dialog).getByRole('list', { name: /correction history/i });
+      expect(history).toHaveTextContent('Category: Groceries → Food & dining');
+      expect(history).toHaveTextContent('all from this merchant');
+    });
+
+    it('tags a transaction and undo puts the previous tag back', async () => {
+      const user = userEvent.setup();
+      const dialog = await open(swiggy({ id: 'T', tag: 'planned' }));
+      mocks.setTransactionsTag.mockResolvedValue(undefined);
+      await user.click(within(dialog).getByRole('radio', { name: 'Reimbursable' }));
+      expect(mocks.setTransactionsTag).toHaveBeenCalledWith(['T'], 'reimbursable');
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      expect(mocks.setTransactionsTag).toHaveBeenLastCalledWith(['T'], 'planned');
+    });
+
+    it('tags only the ticked rows of a review group', async () => {
+      const user = userEvent.setup();
+      const rows = ['a', 'b', 'c'].map((id) => swiggy({ id, needsReview: true }));
+      mocks.useLedger.mockReturnValue(ledger(rows));
+      mocks.setTransactionsTag.mockResolvedValue(undefined);
+      renderPage('/activity?review=1');
+      await user.click(screen.getAllByRole('checkbox')[1]); // untick b
+      await user.click(screen.getByRole('radio', { name: 'Exceptional' }));
+      expect(mocks.setTransactionsTag).toHaveBeenCalledWith(['a', 'c'], 'exceptional');
+    });
+
+    it('combines merchants: search, preview the count, pick the name, and undo deletes the rule', async () => {
+      const user = userEvent.setup();
+      const target = swiggy({ id: 'T' });
+      const chai = [1, 2, 3].map(() => swiggy({ merchant: 'Chai Point', merchantKey: 'chai point' }));
+      const dialog = await open(target, chai);
+      mocks.mergeMerchants.mockResolvedValue({ updated: 4, ruleId: 'rule-m' });
+
+      await user.click(within(dialog).getByRole('button', { name: /combine with another merchant/i }));
+      await user.type(within(dialog).getByLabelText(/find other merchants/i), 'chai');
+      await user.click(within(dialog).getByRole('checkbox', { name: /Chai Point/ }));
+      expect(within(dialog).getByText('4 transactions from 2 merchants will be grouped')).toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Combine' }));
+
+      expect(mocks.mergeMerchants).toHaveBeenCalledWith(['swiggy', 'chai point'], { merchantKey: 'swiggy', name: 'Swiggy' });
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      expect(mocks.deleteRule).toHaveBeenCalledWith('rule-m');
     });
   });
 });

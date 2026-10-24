@@ -83,6 +83,7 @@ export function budgetStatuses(
       usage,
       ...(expectedByToday !== undefined ? { expectedByToday } : {}),
       state,
+      ...(spent > budget.monthlyLimit ? { overBy: spent - budget.monthlyLimit, overPct: budget.monthlyLimit > 0 ? Math.round(((spent - budget.monthlyLimit) / budget.monthlyLimit) * 1000) / 10 : 0 } : {}),
       coverageComplete,
       txnIds: matching.map((t) => t.id),
     };

@@ -10,6 +10,7 @@ import { evaluateSavingActions, type ActionOutcome } from '@/engine/analytics';
 import { formatMonth, todayIso } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, EmptyState, Money, useToast, type Tone } from '@/ui';
 import { errorMessage } from './errors';
+import { ActionStages, potentialMonthly } from '@/features/review/stages';
 import { ConfirmSheet, ListSkeleton } from './planUi';
 
 const TYPE_LABEL: Record<SavingAction['type'], string> = {
@@ -26,11 +27,6 @@ const STATE: Record<ActionOutcome['state'], { label: string; tone: Tone }> = {
   achieved: { label: 'Target reached', tone: 'positive' },
 };
 
-/** What the action would save per month if the user hits the target. Always an estimate. */
-function estimatedMonthly(a: SavingAction): number {
-  const diff = a.type === 'goal_contribution' ? a.targetMonthly - a.baselineMonthly : a.baselineMonthly - a.targetMonthly;
-  return Math.max(0, diff);
-}
 
 export function ActionsTab() {
   const { ready, accounts, statements, transactions, customCategories } = useLedger();
@@ -50,7 +46,7 @@ export function ActionsTab() {
     return new Map(list.map((o) => [o.action.id, o]));
   }, [ready, goals, contributions, active, transactions, accounts, statements, today]);
 
-  const estimatedTotal = active.reduce((s, a) => s + estimatedMonthly(a), 0);
+  const estimatedTotal = active.reduce((s, a) => s + potentialMonthly(a), 0);
   const achievedList = [...outcomes.values()].filter((o) => o.achievedMonthlySaving !== null);
   const achievedTotal = achievedList.reduce((s, o) => s + Math.max(0, o.achievedMonthlySaving ?? 0), 0);
 
@@ -88,14 +84,14 @@ export function ActionsTab() {
           <h2 className="sr-only">Saving totals</h2>
           <dl className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl bg-info-soft px-3 py-2.5 text-info">
-              <dt className="text-sm font-medium">Potential, if every target is met</dt>
+              <dt className="text-sm font-medium">Opportunity, if every target is met</dt>
               <dd className="text-xl font-semibold">
                 <Money value={estimatedTotal} whole /> <span className="text-sm font-normal">a month</span>
               </dd>
               <dd className="text-xs opacity-90">A possibility, not money saved.</dd>
             </div>
             <div className="rounded-xl bg-surface-2 px-3 py-2.5">
-              <dt className="text-sm font-medium text-fg-muted">Observed in complete months</dt>
+              <dt className="text-sm font-medium text-fg-muted">Recorded result in complete months</dt>
               <dd className="text-xl font-semibold text-fg">
                 {achievedList.length > 0 ? (
                   <>
@@ -178,8 +174,6 @@ function ActionItem({
   onDrop: () => void;
 }) {
   const state = outcome ? STATE[outcome.state] : STATE.waiting_for_data;
-  const achieved = outcome?.achievedMonthlySaving ?? null;
-  const est = estimatedMonthly(a);
   return (
     <li className="py-4 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -191,50 +185,7 @@ function ActionItem({
         {a.category && <> · {categoryName(a.category, customCategories)}</>} · from {formatMonth(a.startMonth)}
       </p>
 
-      <dl className="mt-2 grid gap-2 sm:grid-cols-3">
-        <div className="rounded-xl bg-info-soft px-3 py-2 text-info">
-          <dt className="text-xs font-medium">Potential</dt>
-          <dd className="text-sm font-medium">
-            Up to <Money value={est} whole /> a month
-          </dd>
-          <dd className="text-xs opacity-90">If spending reaches the target.</dd>
-        </div>
-        <div className="rounded-xl bg-surface-2 px-3 py-2">
-          <dt className="text-xs font-medium text-fg-muted">Planned</dt>
-          <dd className="text-sm text-fg">
-            <Money value={a.targetMonthly} whole /> a month
-          </dd>
-          <dd className="text-xs text-fg-muted">
-            Down from <Money value={a.baselineMonthly} whole />
-          </dd>
-        </div>
-        <div className="rounded-xl bg-surface-2 px-3 py-2">
-          <dt className="text-xs font-medium text-fg-muted">Observed</dt>
-          {achieved === null ? (
-            <dd className="text-sm text-fg-muted">Waiting for a full month of data</dd>
-          ) : (
-            <>
-              <dd className="text-sm font-medium text-fg">
-                {achieved > 0 ? (
-                  <>
-                    <Money value={achieved} whole /> a month lower
-                  </>
-                ) : (
-                  'No drop so far'
-                )}
-              </dd>
-              <dd className="text-xs text-fg-muted">
-                {outcome && outcome.actualMonthly !== null && (
-                  <>
-                    Now <Money value={outcome.actualMonthly} whole /> a month ·{' '}
-                  </>
-                )}
-                {outcome?.monthsEvaluated.length} complete {outcome?.monthsEvaluated.length === 1 ? 'month' : 'months'}. Statements show the change, not why.
-              </dd>
-            </>
-          )}
-        </div>
-      </dl>
+      <ActionStages action={a} outcome={outcome} />
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="md" variant="secondary" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} aria-label={`Mark ${a.title} completed`} onClick={onComplete}>

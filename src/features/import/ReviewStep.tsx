@@ -7,7 +7,7 @@ import type { CommitChoices, ImportPreview, PreviewRow } from '@/engine/import';
 import { formatDate } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, Money, Notice, SegmentedControl, Spinner, type Tone } from '@/ui';
 import type { AccountTarget } from './AccountStep';
-import { DuplicateRows, TransferHints, UncertainRows } from './ImpactSections';
+import { DuplicateRows, ReviewReceipt, SimilarGroups, TransferHints, UncertainRows } from './ImpactSections';
 import { findTransferCandidates, isUncertain } from './candidates';
 import { FormatNotices } from './FormatNotices';
 import type { Via } from './importTypes';
@@ -154,6 +154,13 @@ export function ReviewStep({
     [preview.rows, excluded, targetAccountId, existing, accounts, targetType],
   );
 
+  const attention = preview.rows.filter(
+    (r) => (replacing || r.duplicateOf === undefined || keepBoth.has(r.index)) && (isUncertain(r) || r.understanding.needsReview),
+  ).length;
+  const similar = preview.rows.filter(
+    (r) => (replacing || r.duplicateOf === undefined || keepBoth.has(r.index)) && !isUncertain(r) && r.understanding.needsReview,
+  );
+
   const accept = (index: number) => {
     setAccepted((prev) => new Set(prev).add(index));
     setExcluded((prev) => {
@@ -259,6 +266,8 @@ export function ReviewStep({
         </Notice>
       )}
 
+      <ReviewReceipt preview={preview} attention={attention} />
+
       <FormatNotices preview={preview} via={via} templateName={templateName} disabled={committing} onTeach={onTeach} />
 
       <Card className="space-y-4">
@@ -339,6 +348,7 @@ export function ReviewStep({
         />
       )}
       <TransferHints items={transferHints} targetName={accountName} />
+      <SimilarGroups rows={similar} />
 
       <section aria-label="Rows to import">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

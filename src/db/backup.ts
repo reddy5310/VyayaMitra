@@ -18,6 +18,8 @@ import type {
   CustomCategory,
   FeedbackEvent,
   GoalContribution,
+  InsightFeedback,
+  MonthReview,
   RecurringDecision,
   SavingAction,
   SavingsGoal,
@@ -190,6 +192,7 @@ const transactionSchema: z.ZodType<Transaction> = z.object({
     rawLines: z.array(str),
   }),
   note: str.optional(),
+  tag: z.enum(['planned', 'exceptional', 'reimbursable']).optional(),
   createdAt: str,
   updatedAt: str,
 });
@@ -203,7 +206,12 @@ const ruleSchema: z.ZodType<UserRule> = z.object({
   }),
   accountId: str.optional(),
   direction: z.enum(['debit', 'credit']).optional(),
-  set: z.object({ category: str.optional(), kind: kindSchema.optional(), merchant: str.optional() }),
+  set: z.object({
+    category: str.optional(),
+    kind: kindSchema.optional(),
+    merchant: str.optional(),
+    merchantKey: str.optional(),
+  }),
   createdFromTxnId: str.optional(),
   enabled: z.boolean(),
   createdAt: str,
@@ -300,10 +308,27 @@ const feedbackSchema: z.ZodType<FeedbackEvent> = z.object({
   txnId: str,
   merchantKey: str,
   vpa: str.optional(),
-  action: z.enum(['category', 'kind', 'merchant', 'confirm', 'reset']),
+  action: z.enum(['category', 'kind', 'merchant', 'confirm', 'reset', 'tag']),
   scope: z.enum(['this', 'merchant']),
   before: kindBeforeSchema,
   after: z.object({ kind: kindSchema, category: str }),
+});
+
+const insightFeedbackSchema: z.ZodType<InsightFeedback> = z.object({
+  id: str.min(1),
+  key: str.min(1),
+  insightId: str,
+  action: z.enum(['dismissed', 'expected', 'irrelevant']),
+  at: str,
+});
+
+const monthReviewSchema: z.ZodType<MonthReview> = z.object({
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  status: z.enum(['in_progress', 'completed']),
+  notes: z.array(str),
+  nextActionIds: z.array(str),
+  completedAt: str.optional(),
+  updatedAt: str,
 });
 
 const settingsSchema: z.ZodType<Partial<AppSettings>> = z.object({
@@ -326,6 +351,8 @@ const dataSchema = z.object({
   savingActions: z.array(savingActionSchema),
   templates: z.array(templateSchema),
   feedback: z.array(feedbackSchema),
+  insightFeedback: z.array(insightFeedbackSchema),
+  monthReviews: z.array(monthReviewSchema),
   settings: settingsSchema.optional(),
 });
 
@@ -369,6 +396,8 @@ const TABLE_NAMES = [
   'savingActions',
   'templates',
   'feedback',
+  'insightFeedback',
+  'monthReviews',
 ] as const;
 
 function countsOf(data: BackupData): Record<string, number> {
@@ -443,11 +472,13 @@ function requireSupportedVersion(version: number | undefined): void {
 /**
  * Lift older backups to the current layout.
  *  v1 → v2: adds the self-training tables (templates, feedback), which v1 files do not have.
+ *  v2 → v3: adds the review-workspace tables (insightFeedback, monthReviews).
  */
 export function migrateBackupData(data: unknown, fromVersion: number): unknown {
   if (typeof data !== 'object' || data === null) return data;
   let out = { ...(data as Record<string, unknown>) };
   if (fromVersion < 2) out = { templates: [], feedback: [], ...out };
+  if (fromVersion < 3) out = { insightFeedback: [], monthReviews: [], ...out };
   return out;
 }
 
@@ -540,7 +571,7 @@ async function openBackup(file: Blob, passphrase: string | undefined): Promise<{
 
 async function collect(): Promise<BackupData> {
   return readAll(async () => {
-    const [accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, settings] =
+    const [accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews, settings] =
       await Promise.all([
         db.accounts.toArray(),
         db.statements.toArray(),
@@ -554,10 +585,12 @@ async function collect(): Promise<BackupData> {
         db.savingActions.toArray(),
         db.templates.toArray(),
         db.feedback.toArray(),
+        db.insightFeedback.toArray(),
+        db.monthReviews.toArray(),
         db.meta.get(META_SETTINGS),
       ]);
     const data: BackupData = {
-      accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback,
+      accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews,
     };
     if (settings?.value) data.settings = settingsSchema.parse(settings.value);
     return data;
@@ -644,6 +677,8 @@ export async function restoreBackup(
       await db.savingActions.bulkAdd(data.savingActions);
       await db.templates.bulkAdd(data.templates);
       await db.feedback.bulkAdd(data.feedback);
+      await db.insightFeedback.bulkAdd(data.insightFeedback);
+      await db.monthReviews.bulkAdd(data.monthReviews);
       if (data.settings) await db.meta.put({ key: META_SETTINGS, value: data.settings });
       await retrainLearnedModel();
       await rebuildCalibration();
@@ -700,6 +735,11 @@ export async function restoreBackup(
     await db.templates.bulkAdd(freshTemplates);
     counts.templates = freshTemplates.length;
     await addNew('feedback', db.feedback, data.feedback);
+    await addNew('insightFeedback', db.insightFeedback, data.insightFeedback);
+    const haveMonths = new Set((await db.monthReviews.toCollection().primaryKeys()) as string[]);
+    const freshMonths = data.monthReviews.filter((r) => !haveMonths.has(r.month));
+    await db.monthReviews.bulkAdd(freshMonths);
+    counts.monthReviews = freshMonths.length;
     if (data.settings && !(await db.meta.get(META_SETTINGS))) {
       await db.meta.put({ key: META_SETTINGS, value: data.settings });
     }

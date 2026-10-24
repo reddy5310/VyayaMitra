@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CardCycle, CoverageCell } from '@/engine/analytics';
-import { formatDate } from '@/lib/dates';
+import { formatDate, todayIso } from '@/lib/dates';
 import { ToastProvider } from '@/ui';
 import { makeAccount, makeStatement, makeTxn } from '../activity/testUtils';
 
@@ -23,6 +23,7 @@ vi.mock('@/db/actions', () => ({ updateAccount: mocks.updateAccount, deleteAccou
 import AccountDetailPage from './AccountDetailPage';
 import AccountsPage from './AccountsPage';
 
+const currentMonth = () => todayIso().slice(0, 7);
 const bank = makeAccount({ id: 'bank1', name: 'Demo Savings ••1234', type: 'savings' });
 const card = makeAccount({ id: 'card1', name: 'Demo Card ••9999', type: 'credit_card', mask: '9999' });
 
@@ -78,7 +79,7 @@ beforeEach(() => {
     customCategories: [],
   });
   mocks.coverageGrid.mockImplementation((accounts: { id: string }[], _s: unknown, months: string[]) =>
-    accounts.flatMap((a) => months.map((m, i) => cell(a.id, m, i === months.length - 1 ? 'partial' : i === 0 ? 'before_tracking' : 'full'))),
+    accounts.flatMap((a) => months.map((m, i) => cell(a.id, m, i === months.length - 1 ? 'partial' : i === 0 ? 'before_tracking' : i === 1 ? 'missing' : 'full'))),
   );
 });
 afterEach(() => vi.clearAllMocks());
@@ -95,14 +96,33 @@ describe('AccountsPage', () => {
     expect(screen.getAllByRole('link', { name: /import/i })[0]).toHaveAttribute('href', '/import');
   });
 
-  it('shows a coverage grid with a legend and opens the account when a month is tapped', async () => {
+  it('shows a coverage grid with a legend; full months open the account', async () => {
     const user = userEvent.setup();
     renderAt('/accounts');
     const grid = screen.getByRole('table', { name: /statement coverage/i });
     expect(within(screen.getByRole('list', { name: 'Legend' })).getAllByRole('listitem')).toHaveLength(4);
-    const partial = within(grid).getAllByRole('button', { name: /Demo Savings ••1234, .*Part of the month imported/ });
-    await user.click(partial[0]);
+    await user.click(within(grid).getAllByRole('button', { name: /Demo Savings ••1234, .*Full month imported/ })[0]);
     expect(screen.getByTestId('where')).toHaveTextContent('/accounts/bank1');
+  });
+
+  it('a missing month links to Import with a hint naming the account and month', () => {
+    renderAt('/accounts');
+    const link = within(screen.getByRole('table', { name: /statement coverage/i })).getAllByRole('link', { name: /Import your Demo Savings ••1234 statement for / })[0];
+    expect(link.getAttribute('href')).toMatch(/^\/import\?account=bank1&month=\d{4}-\d{2}$/);
+  });
+
+  it('a partial month opens a sheet that says exactly which days are missing', async () => {
+    const user = userEvent.setup();
+    mocks.useLedger.mockReturnValue({
+      ...mocks.useLedger(),
+      statements: [makeStatement({ id: 'p', accountId: 'bank1', fileName: 'half.pdf', periodStart: `${currentMonth()}-01`, periodEnd: `${currentMonth()}-10` })],
+    });
+    renderAt('/accounts');
+    await user.click(within(screen.getByRole('table', { name: /statement coverage/i })).getAllByRole('button', { name: /Part of the month imported\. See which days are missing/ })[0]);
+    const sheet = await screen.findByRole('dialog');
+    const missing = within(sheet).getByRole('region', { name: 'Days with no statement' });
+    expect(missing).toHaveTextContent(new RegExp(`${formatDate(`${currentMonth()}-11`, { short: true })} to `));
+    expect(within(sheet).getByRole('region', { name: 'Statements covering this month' })).toHaveTextContent('half.pdf');
   });
 });
 

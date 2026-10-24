@@ -23,6 +23,8 @@ import type {
   CustomCategory,
   FeedbackEvent,
   GoalContribution,
+  InsightFeedback,
+  MonthReview,
   RecurringDecision,
   SavingAction,
   SavingsGoal,
@@ -33,8 +35,8 @@ import type {
 } from '@/domain/types';
 
 /** Version of the stored/backup data layout. Bump together with a new Dexie `version(n)`. */
-export const DB_SCHEMA_VERSION = 2;
-export const APP_VERSION = '1.1.0';
+export const DB_SCHEMA_VERSION = 3;
+export const APP_VERSION = '1.2.0';
 
 /** Key/value store: `settings` (AppSettings) and `learnedModel` (opaque JSON from the understand module). */
 export interface MetaRecord {
@@ -62,6 +64,8 @@ export class VyayaMitraDB extends Dexie {
   savingActions!: Table<SavingAction, string>;
   templates!: Table<StatementTemplate, string>;
   feedback!: Table<FeedbackEvent, string>;
+  insightFeedback!: Table<InsightFeedback, string>;
+  monthReviews!: Table<MonthReview, string>;
   meta!: Table<MetaRecord, string>;
 
   constructor(name = 'vyayamitra') {
@@ -93,6 +97,18 @@ export class VyayaMitraDB extends Dexie {
         const meta = tx.table<MetaRecord, string>('meta');
         const log = ((await meta.get(META_MIGRATIONS))?.value as { version: number; at: string }[] | undefined) ?? [];
         await meta.put({ key: META_MIGRATIONS, value: [...log, { version: 2, at: new Date().toISOString() }] });
+      });
+    // v3 — review workspace: insight dismissals ("expected", "irrelevant") and month-end reviews.
+    // Transaction.tag is a plain (unindexed) property, so existing rows need no rewrite.
+    this.version(3)
+      .stores({
+        insightFeedback: 'id, key, insightId, at',
+        monthReviews: 'month',
+      })
+      .upgrade(async (tx) => {
+        const meta = tx.table<MetaRecord, string>('meta');
+        const log = ((await meta.get(META_MIGRATIONS))?.value as { version: number; at: string }[] | undefined) ?? [];
+        await meta.put({ key: META_MIGRATIONS, value: [...log, { version: 3, at: new Date().toISOString() }] });
       });
   }
 }

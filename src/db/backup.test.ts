@@ -69,7 +69,7 @@ describe('backup', () => {
     const before = await dump();
     const blob = await exportBackup();
     const env = JSON.parse(await blob.text());
-    expect(env).toMatchObject({ format: 'vyayamitra-backup', schemaVersion: 2 });
+    expect(env).toMatchObject({ format: 'vyayamitra-backup', schemaVersion: 3 });
     expect(env.encrypted).toBeUndefined();
     expect(env.appVersion).toBeTypeOf('string');
     expect(new Date(env.createdAt).getTime()).not.toBeNaN();
@@ -124,10 +124,10 @@ describe('backup', () => {
   it('inspects without changing anything', async () => {
     await seed();
     const plain = await inspectBackup(await exportBackup());
-    expect(plain).toMatchObject({ encrypted: false, schemaVersion: 2, counts: { accounts: 1, transactions: 2, goals: 1 } });
+    expect(plain).toMatchObject({ encrypted: false, schemaVersion: 3, counts: { accounts: 1, transactions: 2, goals: 1 } });
     const enc = await exportBackup({ passphrase: 'pw' });
     const locked = await inspectBackup(enc);
-    expect(locked).toMatchObject({ encrypted: true, schemaVersion: 2 });
+    expect(locked).toMatchObject({ encrypted: true, schemaVersion: 3 });
     expect(locked.counts).toBeUndefined();
     expect((await inspectBackup(enc, { passphrase: 'pw' })).counts).toMatchObject({ transactions: 2 });
   });

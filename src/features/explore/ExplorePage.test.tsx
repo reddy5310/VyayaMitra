@@ -108,6 +108,13 @@ beforeEach(() => {
       },
     ],
     suggestedAction: { category: 'food_dining', suggestedTarget: 400_000, label: 'Set a limit for Food & dining' },
+    drivers: {
+      purchases: { current: 12, previous: 6 },
+      averageSize: { current: 60_000, previous: 50_000 },
+      merchantMix: { newMerchants: 150_000, stoppedMerchants: 40_000, newCount: 2, stoppedCount: 1 },
+      oneOffs: { total: 900_000, txnIds: ['o1'] },
+      refunds: { current: 20_000, previous: 80_000 },
+    },
   }));
   analytics.spendingCalendar.mockReturnValue([
     { date: '2025-09-01', amount: 0, count: 0, covered: false },
@@ -341,5 +348,39 @@ describe('Explore: chart honesty', () => {
     ]);
     renderAt('/explore?view=trends');
     expect(await screen.findByText(/Left out because statements do not cover the whole month: Dec 2024/)).toBeInTheDocument();
+  });
+});
+
+describe('Explore: compare drill-down and tone', () => {
+  it('shows what drove the change without ever saying prices changed, and links one-offs to their transactions', async () => {
+    const { container } = renderAt('/explore?view=compare');
+    const section = (await screen.findByRole('heading', { name: 'What drove it' })).closest('section')!;
+    expect(within(section).getByText(/Purchases: 12 against 6/)).toBeInTheDocument();
+    expect(within(section).getByText(/Each purchase was larger on average/)).toBeInTheDocument();
+    expect(within(section).getByText(/2 new merchants/)).toBeInTheDocument();
+    expect(within(section).getByText(/Refunds:/)).toBeInTheDocument();
+    const oneOff = within(section).getByText(/One-off or tagged expenses/).closest('a')!;
+    expect(hrefOf(oneOff)).toBe('/activity?ids=o1');
+    expect(section.textContent ?? '').not.toMatch(/price/i);
+    // drivers sit above the merchants section
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings.indexOf('What drove it')).toBeLessThan(headings.findIndex((h) => /merchants changed most/.test(h ?? '')));
+    // increases are neutral: glyph + sign, never red/green
+    expect(container.textContent).toMatch(/▲ \+/);
+    expect(container.innerHTML).not.toMatch(/text-(negative|positive)/);
+  });
+
+  it('hides driver amounts when amounts are hidden', async () => {
+    const { container } = renderAt('/explore?view=compare', true);
+    await screen.findByRole('heading', { name: 'What drove it' });
+    expect(container.textContent ?? '').not.toMatch(/₹\s?[1-9][\d,]*/);
+  });
+
+  it('omits the section when the engine gives no drivers', async () => {
+    const base = analytics.explainChange.getMockImplementation()!;
+    analytics.explainChange.mockImplementation((...a: unknown[]) => ({ ...(base as (...x: unknown[]) => object)(...a), drivers: undefined }));
+    renderAt('/explore?view=compare');
+    await screen.findByRole('list', { name: /Waterfall/ });
+    expect(screen.queryByRole('heading', { name: 'What drove it' })).not.toBeInTheDocument();
   });
 });

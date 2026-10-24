@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AlertOctagon, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import { categoryName } from '@/domain/categories';
-import type { CustomCategory, IsoDate, Paise, SavingAction } from '@/domain/types';
+import type { CustomCategory, InsightFeedback, IsoDate, Paise, SavingAction } from '@/domain/types';
 import type { Insight, InsightSeverity } from '@/engine/analytics';
 import { createSavingAction, upsertBudget } from '@/db/actions';
+import { clearInsightFeedback, recordInsightFeedback } from '@/db/review';
 import { ROUTES, activityLink } from '@/app/routes';
 import { addMonths, formatMonth, monthKey } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
@@ -49,9 +50,33 @@ interface Props {
   today: IsoDate;
   title?: string;
   subtitle?: string;
+  /** Saved dismiss / expected / not-relevant marks, so "Undo" can find the one it just made. */
+  feedback?: readonly InsightFeedback[];
 }
 
-export function InsightsSection({ insights, actions, baselines, customCategories, today, title = 'Insights', subtitle = 'What changed, and what you can do about it' }: Props) {
+export function InsightsSection({ insights, actions, baselines, customCategories, today, title = 'Insights', subtitle = 'What changed, and what you can do about it', feedback = [] }: Props) {
+  const { toast } = useToast();
+  const feedbackRef = useRef(feedback);
+  feedbackRef.current = feedback;
+
+  async function mark(insight: Insight, action: InsightFeedback['action']) {
+    const key = insight.key ?? insight.id;
+    try {
+      await recordInsightFeedback({ key, insightId: insight.id, action });
+      toast(action === 'dismissed' ? 'Insight dismissed.' : action === 'expected' ? 'Marked as expected.' : 'We will not show this kind of insight again.', {
+        tone: 'success',
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            const entry = feedbackRef.current.find((f) => f.key === key && f.action === action);
+            if (entry) clearInsightFeedback(entry.id).catch((e) => toast(e instanceof Error ? e.message : 'Could not undo.', { tone: 'error' }));
+          },
+        },
+      });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not save that.', { tone: 'error' });
+    }
+  }
   const [showAll, setShowAll] = useState(false);
   const [limitFor, setLimitFor] = useState<Insight | null>(null);
   const visible = showAll ? insights : insights.slice(0, COLLAPSED_COUNT);
@@ -70,6 +95,7 @@ export function InsightsSection({ insights, actions, baselines, customCategories
               started={actions.some((a) => a.insightId === insight.id && a.status !== 'dropped')}
               canSetLimit={limitBaseline(insight, baselines) !== null}
               onSetLimit={() => setLimitFor(insight)}
+              onMark={(a) => mark(insight, a)}
             />
           ))}
         </ul>
@@ -111,11 +137,13 @@ function InsightItem({
   started,
   canSetLimit,
   onSetLimit,
+  onMark,
 }: {
   insight: Insight;
   started: boolean;
   canSetLimit: boolean;
   onSetLimit: () => void;
+  onMark: (a: InsightFeedback['action']) => void;
 }) {
   const sev = SEVERITY[insight.severity];
   const Icon = sev.icon;
@@ -177,6 +205,25 @@ function InsightItem({
                   {a.label}
                 </LinkButton>
               ) : null)}
+          </div>
+          <div className="flex flex-wrap gap-1" role="group" aria-label={`Feedback on ${insight.title}`}>
+            {(
+              [
+                ['dismissed', 'Dismiss'],
+                ['expected', 'Expected'],
+                ['irrelevant', 'Not relevant'],
+              ] as const
+            ).map(([a, label]) => (
+              <button
+                key={a}
+                type="button"
+                onClick={() => onMark(a)}
+                className="min-h-touch rounded-xl px-2 text-sm font-medium text-fg-muted hover:bg-surface-2 hover:text-fg"
+              >
+                {label}
+                <span className="sr-only">: {insight.title}</span>
+              </button>
+            ))}
           </div>
         </div>
       </div>

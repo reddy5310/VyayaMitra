@@ -1,11 +1,12 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, CircleDashed, Minus, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import { accountLink } from '@/app/routes';
+import { Link, useNavigate } from 'react-router-dom';
+import { ROUTES, accountLink } from '@/app/routes';
 import type { Account, Statement } from '@/domain/types';
 import { coverageGrid, type CoverageCell } from '@/engine/analytics';
-import { formatMonthShort } from '@/lib/dates';
-import { cn } from '@/ui';
+import { formatDate, formatMonth, formatMonthShort } from '@/lib/dates';
+import { Sheet, cn } from '@/ui';
+import { missingDayRanges } from './accountInfo';
 
 const STATE_INFO: Record<CoverageCell['state'], { label: string; icon: typeof Check; cls: string }> = {
   full: { label: 'Full month imported', icon: Check, cls: 'bg-positive-soft text-positive' },
@@ -17,6 +18,7 @@ const STATE_INFO: Record<CoverageCell['state'], { label: string; icon: typeof Ch
 /** Accounts × months. State is shown with an icon and a word (never colour alone); tapping a cell opens that account's statements. */
 export function CoverageGrid({ accounts, statements, months }: { accounts: readonly Account[]; statements: readonly Statement[]; months: string[] }) {
   const navigate = useNavigate();
+  const [partial, setPartial] = useState<{ account: Account; month: string } | null>(null);
   const cells = useMemo(() => coverageGrid(accounts, statements, months), [accounts, statements, months]);
   const byKey = useMemo(() => new Map(cells.map((c) => [`${c.accountId}|${c.month}`, c])), [cells]);
 
@@ -47,16 +49,29 @@ export function CoverageGrid({ accounts, statements, months }: { accounts: reado
                   const cell = byKey.get(`${a.id}|${m}`);
                   const info = STATE_INFO[cell?.state ?? 'missing'];
                   const Icon = info.icon;
+                  const state = cell?.state ?? 'missing';
+                  const cls = cn('inline-flex h-9 w-9 items-center justify-center rounded-lg', info.cls);
+                  const label = `${a.name}, ${formatMonthShort(m)}: ${info.label}`;
                   return (
                     <td key={m} className="p-0.5 text-center">
-                      <button
-                        type="button"
-                        onClick={() => navigate(accountLink(a.id))}
-                        aria-label={`${a.name}, ${formatMonthShort(m)}: ${info.label}. Open statements`}
-                        className={cn('inline-flex h-9 w-9 items-center justify-center rounded-lg', info.cls)}
-                      >
-                        <Icon className="h-4 w-4" aria-hidden />
-                      </button>
+                      {state === 'missing' ? (
+                        <Link
+                          to={`${ROUTES.import}?account=${encodeURIComponent(a.id)}&month=${m}`}
+                          aria-label={`${label}. Import your ${a.name} statement for ${formatMonth(m)}`}
+                          className={cls}
+                        >
+                          <Icon className="h-4 w-4" aria-hidden />
+                        </Link>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => (state === 'partial' ? setPartial({ account: a, month: m }) : navigate(accountLink(a.id)))}
+                          aria-label={state === 'partial' ? `${label}. See which days are missing` : `${label}. Open statements`}
+                          className={cls}
+                        >
+                          <Icon className="h-4 w-4" aria-hidden />
+                        </button>
+                      )}
                     </td>
                   );
                 })}
@@ -78,6 +93,59 @@ export function CoverageGrid({ accounts, statements, months }: { accounts: reado
           );
         })}
       </ul>
+      <PartialMonthSheet partial={partial} statements={statements} onClose={() => setPartial(null)} />
     </div>
+  );
+}
+
+function PartialMonthSheet({ partial, statements, onClose }: { partial: { account: Account; month: string } | null; statements: readonly Statement[]; onClose: () => void }) {
+  const ranges = partial ? missingDayRanges(partial.account.id, partial.month, statements) : [];
+  const covering = partial
+    ? statements.filter(
+        (s) => s.accountId === partial.account.id && s.periodStart && s.periodEnd && s.periodStart <= `${partial.month}-31` && s.periodEnd >= `${partial.month}-01`,
+      )
+    : [];
+  return (
+    <Sheet
+      open={partial !== null}
+      onClose={onClose}
+      title={partial ? `${partial.account.name}: ${formatMonth(partial.month)}` : 'Partly covered'}
+      description="Only part of this month is covered by the statements you imported."
+    >
+      {partial && (
+        <div className="space-y-4 text-sm">
+          <section aria-label="Days with no statement">
+            <h3 className="mb-1 font-semibold text-fg">Days with no statement</h3>
+            {ranges.length === 0 ? (
+              <p className="text-fg-muted">Every day of the month falls inside an imported statement period.</p>
+            ) : (
+              <ul className="list-disc space-y-0.5 pl-5">
+                {ranges.map((r) => (
+                  <li key={r.start}>
+                    {r.start === r.end ? formatDate(r.start) : `${formatDate(r.start, { short: true })} to ${formatDate(r.end)}`} ({r.days} day{r.days === 1 ? '' : 's'})
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <section aria-label="Statements covering this month">
+            <h3 className="mb-1 font-semibold text-fg">Covered by</h3>
+            <ul className="list-disc space-y-0.5 pl-5">
+              {covering.map((s) => (
+                <li key={s.id}>
+                  {s.fileName} ({formatDate(s.periodStart!, { short: true })} to {formatDate(s.periodEnd!)})
+                </li>
+              ))}
+            </ul>
+          </section>
+          <Link
+            to={`${ROUTES.import}?account=${encodeURIComponent(partial.account.id)}&month=${partial.month}`}
+            className="inline-flex min-h-touch items-center rounded-xl bg-primary px-4 text-sm font-medium text-primary-fg hover:bg-primary/90"
+          >
+            Import the missing statement
+          </Link>
+        </div>
+      )}
+    </Sheet>
   );
 }

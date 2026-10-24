@@ -20,8 +20,13 @@ interface Scored {
   insight: Insight;
 }
 
-function makeId(type: Insight['type'], subject: string, period: string): string {
-  return `${type}-${hashId(type, subject, period)}`;
+/** id -> period-free key (type + subject), filled by makeId and read by `add`. */
+const keyById = new Map<string, string>();
+
+function makeId(type: Insight['type'], subject: string, period: string, keySubject: string = subject): string {
+  const id = `${type}-${hashId(type, subject, period)}`;
+  keyById.set(id, `${type}:${keySubject}`);
+  return id;
 }
 
 /** "September 2025", "Jul – Sep 2025" or "1–14 Oct 2025" for a date range. */
@@ -76,9 +81,12 @@ export function generateInsights(input: InsightInput): Insight[] {
   const tentative = !cov.complete;
   const label = periodLabel(start, effEnd);
   const catOf = categoryResolver(txns);
+  const untagged = txns.filter((t) => !t.tag);
+  const expectedBack = periodTxns.filter((t) => t.tag === 'reimbursable' && t.direction === 'debit' && isSpending(t)).reduce((n, t) => n + t.amount, 0);
+  const backNote = expectedBack > 0 ? ` ${inr(expectedBack)} of this is tagged as expected back.` : '';
   const scored: Scored[] = [];
   const add = (score: number, insight: Insight): void => {
-    scored.push({ score, insight });
+    scored.push({ score, insight: { ...insight, key: keyById.get(insight.id) ?? insight.type } });
   };
 
   const focal: MonthKey = monthKey(effEnd);
@@ -113,13 +121,13 @@ export function generateInsights(input: InsightInput): Insight[] {
       add(
         flat ? 40 : diff > 0 ? 80 : 45,
         {
-          id: makeId('spending_change', focal, periodKey),
+          id: makeId('spending_change', focal, periodKey, 'spending'),
           type: 'spending_change',
           severity: flat ? 'info' : diff < 0 ? 'positive' : pct >= 20 ? 'warning' : 'info',
           title: flat ? `Spending is about the same as ${prevLabel}` : `Spending is ${dir} ${pct}% compared with ${prevLabel}`,
           body: flat
             ? `You spent ${inr(curSpend)} in ${focalLabel} and ${inr(prevSpend)} in ${prevLabel}.`
-            : `You spent ${inr(curSpend)} in ${focalLabel}, ${inr(Math.abs(diff))} ${diff < 0 ? 'less' : 'more'} than the ${inr(prevSpend)} spent in ${prevLabel}.`,
+            : `You spent ${inr(curSpend)} in ${focalLabel}, ${inr(Math.abs(diff))} ${diff < 0 ? 'less' : 'more'} than the ${inr(prevSpend)} spent in ${prevLabel}.${backNote}`,
           evidence: {
             txnIds: topIds(curTxns.filter(isSpending), 5),
             figures: [
@@ -156,7 +164,7 @@ export function generateInsights(input: InsightInput): Insight[] {
   } else if (comparisonBlocked) {
     const notes = comparisonBlocked.notes.slice(0, 2);
     add(50, {
-      id: makeId('coverage', `compare-${prevM}`, periodKey),
+      id: makeId('coverage', `compare-${prevM}`, periodKey, 'compare'),
       type: 'coverage',
       severity: 'info',
       title: `Can't compare with ${prevLabel} yet`,
@@ -170,9 +178,9 @@ export function generateInsights(input: InsightInput): Insight[] {
   // ── Category change against the 3-complete-month baseline ────────────────────────────────
   const baseMonths = completeMonths(txns, { accounts, statements, today }, focal).slice(-3);
   if (baseMonths.length > 0) {
-    const base = averagesOverMonths(txns, baseMonths);
+    const base = averagesOverMonths(untagged, baseMonths);
     const baseMap = new Map(base.map((b) => [b.category, b.monthlyAverage]));
-    const byCat = spendingByMonthCategory(curTxns).get(focal) ?? new Map<string, { amount: Paise; ids: string[] }>();
+    const byCat = spendingByMonthCategory(curTxns.filter((t) => !t.tag)).get(focal) ?? new Map<string, { amount: Paise; ids: string[] }>();
     const changes: { category: string; cur: Paise; baseline: Paise; ids: string[] }[] = [];
     for (const [category, v] of byCat) {
       const baseline = baseMap.get(category) ?? 0;
@@ -192,13 +200,13 @@ export function generateInsights(input: InsightInput): Insight[] {
         : partial
           ? `${name} is already ${inr(c.cur)} in ${focalLabel}, ${inr(over)} (${pct}%) above your usual ${inr(c.baseline)} for a whole month.`
           : `${name} was ${inr(c.cur)} in ${focalLabel}, ${inr(over)} (${pct}%) above your usual ${inr(c.baseline)} a month.`;
-      const catTxns = curTxns.filter((t) => isSpending(t) && catOf(t) === c.category);
+      const catTxns = curTxns.filter((t) => !t.tag && isSpending(t) && catOf(t) === c.category);
       add(75 + Math.min(10, Math.floor(over / 500_000)), {
         id: makeId('category_change', c.category, periodKey),
         type: 'category_change',
         severity: pct >= 100 ? 'warning' : 'info',
         title: `${name} is up ${pct}% on your usual`,
-        body: lead,
+        body: `${lead}${backNote}`,
         evidence: {
           txnIds: topIds(catTxns, 6),
           figures: [
@@ -318,13 +326,13 @@ export function generateInsights(input: InsightInput): Insight[] {
       const med = median(sample.map((t) => t.amount));
       const threshold = Math.max(med * 3, 500_000);
       const big = periodTxns
-        .filter((t) => t.direction === 'debit' && ['expense', 'p2p_out', 'cash_withdrawal', 'fee', 'unknown'].includes(t.kind) && t.amount > threshold)
+        .filter((t) => !t.tag && t.direction === 'debit' && ['expense', 'p2p_out', 'cash_withdrawal', 'fee', 'unknown'].includes(t.kind) && t.amount > threshold)
         .sort((a, b) => b.amount - a.amount);
       if (big.length > 0) {
         const t = big[0];
         const times = med > 0 ? Math.round((t.amount / med) * 10) / 10 : 0;
         add(70, {
-          id: makeId('large_transaction', t.id, periodKey),
+          id: makeId('large_transaction', t.id, periodKey, t.merchantKey || t.merchant),
           type: 'large_transaction',
           severity: 'info',
           title: `Large payment: ${inr(t.amount)} to ${t.merchant}`,
@@ -471,7 +479,7 @@ export function generateInsights(input: InsightInput): Insight[] {
       if (rows >= 10) {
         const k = top.length;
         add(57, {
-          id: makeId('learning', top.map(([key]) => key).join(','), periodKey),
+          id: makeId('learning', top.map(([key]) => key).join(','), periodKey, 'merchants'),
           type: 'learning',
           severity: 'info',
           title: `Teach ${k} merchant${k === 1 ? '' : 's'} to fix ${rows} rows`,
@@ -537,6 +545,13 @@ export function generateInsights(input: InsightInput): Insight[] {
     }
   }
 
-  scored.sort((a, b) => b.score - a.score || a.insight.id.localeCompare(b.insight.id));
-  return scored.slice(0, MAX_INSIGHTS).map((s) => s.insight);
+  const fb = input.feedback ?? [];
+  const hiddenIds = new Set(fb.filter((f) => f.action === 'dismissed' || f.action === 'expected').map((f) => f.insightId));
+  const hiddenKeys = new Set(fb.filter((f) => f.action === 'irrelevant').map((f) => f.key));
+  const dismissals = new Map<string, number>();
+  for (const f of fb) if (f.action === 'dismissed') dismissals.set(f.key, (dismissals.get(f.key) ?? 0) + 1);
+  for (const [k, n] of dismissals) if (n >= 3) hiddenKeys.add(k);
+  const visible = scored.filter((s) => !hiddenIds.has(s.insight.id) && !hiddenKeys.has(s.insight.key ?? ''));
+  visible.sort((a, b) => b.score - a.score || a.insight.id.localeCompare(b.insight.id));
+  return visible.slice(0, MAX_INSIGHTS).map((s) => s.insight);
 }

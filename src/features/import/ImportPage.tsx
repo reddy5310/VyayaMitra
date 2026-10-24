@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
-import { monthEnd, monthStart } from '@/lib/dates';
+import { formatMonth, monthEnd, monthStart } from '@/lib/dates';
 import { landingMonth } from './landing';
 import { useAccounts, useLedger } from '@/db/hooks';
 import { saveTemplate, useTemplates } from '@/db/learning';
@@ -81,6 +82,10 @@ export default function ImportPage() {
   const { setCustom } = usePeriod();
   const accounts = useAccounts() ?? [];
   const ledger = useLedger();
+  const [searchParams] = useSearchParams();
+  const hintAccount = accounts.find((a) => a.id === searchParams.get('account'));
+  const hintMonth = /^\d{4}-\d{2}$/.test(searchParams.get('month') ?? '') ? searchParams.get('month') : null;
+  const hint = hintAccount && hintMonth ? `Import your ${hintAccount.name} statement for ${formatMonth(hintMonth)}` : undefined;
   const templates = useTemplates() ?? [];
   const [phase, setPhase] = useState<Phase>({ name: 'choose' });
   const [error, setError] = useState<ErrorView | null>(null);
@@ -421,7 +426,7 @@ export default function ImportPage() {
       {batch.length > 1 && <BatchList items={batch} onSkip={phase.name === 'review' && phase.committing ? undefined : skipFile} />}
 
       {phase.name === 'choose' && (
-        <ChooseFileStep error={error} problems={problems} onFiles={onFiles} onTeach={canTeach && teachFile ? startTeach : undefined} />
+        <ChooseFileStep hint={hint} error={error} problems={problems} onFiles={onFiles} onTeach={canTeach && teachFile ? startTeach : undefined} />
       )}
 
       {phase.name === 'reading' && (

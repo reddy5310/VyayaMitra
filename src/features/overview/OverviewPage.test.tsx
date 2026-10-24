@@ -18,6 +18,14 @@ vi.mock('@/db/hooks', () => hooks);
 const actions = vi.hoisted(() => ({ createSavingAction: vi.fn(), upsertBudget: vi.fn() }));
 vi.mock('@/db/actions', () => actions);
 
+const review = vi.hoisted(() => ({
+  useInsightFeedback: vi.fn(),
+  useMonthReviews: vi.fn(),
+  recordInsightFeedback: vi.fn(),
+  clearInsightFeedback: vi.fn(),
+}));
+vi.mock('@/db/review', () => review);
+
 const sample = vi.hoisted(() => ({ sampleDataAvailable: true, startSample: vi.fn() }));
 vi.mock('./sample', () => sample);
 
@@ -103,6 +111,7 @@ function setup(
     accounts?: Account[];
     plan?: { monthlyLimit: number; categories: string[] } | null;
     comparison?: unknown;
+    reviews?: unknown[];
   } = {},
 ) {
   hooks.useLedger.mockReturnValue({
@@ -112,6 +121,8 @@ function setup(
     transactions: o.transactions ?? [txn('t1')],
     customCategories: [],
   });
+  review.useInsightFeedback.mockReturnValue([{ id: 'fb1', key: 'category_change:food', insightId: 'ins-food', action: 'expected', at: '' }]);
+  review.useMonthReviews.mockReturnValue(o.reviews ?? [{ month: '2025-09', status: 'completed', notes: [], nextActionIds: [], updatedAt: '' }]);
   hooks.useBudgets.mockReturnValue([]);
   hooks.useRecurringDecisions.mockReturnValue([]);
   hooks.useSavingActions.mockReturnValue([]);
@@ -136,6 +147,7 @@ function setup(
 
 const foodInsight: Insight = {
   id: 'ins-food',
+  key: 'category_change:food',
   type: 'category_change',
   severity: 'warning',
   title: 'Food & dining is up',
@@ -285,6 +297,42 @@ describe('Overview action card', () => {
   it('routes other insight actions to the right screen', () => {
     setup({ insights: [{ id: 'r', type: 'recurring', severity: 'info', title: 'Subs', body: 'b', evidence: { txnIds: [], figures: [] }, action: { type: 'review_recurring', label: 'Review subscriptions' } }] });
     expect(screen.getByRole('link', { name: 'Review subscriptions' })).toHaveAttribute('href', '/plan?tab=recurring');
+  });
+});
+
+describe('Overview review prompt and insight feedback', () => {
+  it('replaces the action card with "Your next review" when the latest complete month has no completed review', () => {
+    setup({ reviews: [], insights: [foodInsight] });
+    expect(screen.getByRole('heading', { name: 'Your next review' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Start review' })).toHaveAttribute('href', '/review?month=2025-09');
+    expect(screen.queryByText('Food & dining is up')).not.toBeInTheDocument();
+  });
+
+  it('offers to continue an in-progress review', () => {
+    setup({ reviews: [{ month: '2025-09', status: 'in_progress', notes: [], nextActionIds: [], updatedAt: '' }] });
+    expect(screen.getByRole('link', { name: 'Continue review' })).toHaveAttribute('href', '/review?month=2025-09');
+  });
+
+  it('keeps the insight card once the review is completed, and passes saved feedback to generateInsights', () => {
+    setup({ insights: [foodInsight] });
+    expect(screen.queryByRole('heading', { name: 'Your next review' })).not.toBeInTheDocument();
+    expect(screen.getByText('Food & dining is up')).toBeInTheDocument();
+    expect(analytics.generateInsights).toHaveBeenCalledWith(expect.objectContaining({ feedback: [expect.objectContaining({ id: 'fb1' })] }));
+  });
+
+  it('records Expected / Not relevant / Dismiss and can undo from the toast', async () => {
+    review.recordInsightFeedback.mockResolvedValue(undefined);
+    review.clearInsightFeedback.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    setup({ insights: [foodInsight] });
+    await user.click(screen.getByRole('button', { name: /^Expected/ }));
+    expect(review.recordInsightFeedback).toHaveBeenCalledWith({ key: 'category_change:food', insightId: 'ins-food', action: 'expected' });
+    await user.click(await screen.findByRole('button', { name: 'Undo' }));
+    expect(review.clearInsightFeedback).toHaveBeenCalledWith('fb1');
+    await user.click(screen.getByRole('button', { name: /^Not relevant/ }));
+    expect(review.recordInsightFeedback).toHaveBeenLastCalledWith({ key: 'category_change:food', insightId: 'ins-food', action: 'irrelevant' });
+    await user.click(screen.getByRole('button', { name: /^Dismiss\s*:/ }));
+    expect(review.recordInsightFeedback).toHaveBeenLastCalledWith({ key: 'category_change:food', insightId: 'ins-food', action: 'dismissed' });
   });
 });
 

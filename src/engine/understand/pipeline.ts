@@ -623,6 +623,9 @@ export function understandTransaction(input: UnderstandInput, ctx: UnderstandCon
 
   const merchantDisplay = rule.merchant ? rule.merchant.value : merchant0.display;
   if (rule.merchant) counterparty.name = merchantDisplay;
+  // Merchant alias: the rule matched on the NATURAL key above, so aliasing can never loop or chain.
+  const merchantKey = rule.alias ? rule.alias.value : merchant0.key;
+  if (rule.alias) reasons.push(`Grouped under ${rule.merchant ? rule.merchant.value : rule.alias.value} (your merge)`);
 
   // ── category ────────────────────────────────────────────────────────────────────────────────
   let category: CategoryDecision;
@@ -688,7 +691,7 @@ export function understandTransaction(input: UnderstandInput, ctx: UnderstandCon
     channel,
     counterparty,
     merchant: merchantDisplay,
-    merchantKey: merchant0.key,
+    merchantKey,
     kind,
     kindSource,
     category: category.id,

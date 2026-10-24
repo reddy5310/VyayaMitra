@@ -125,10 +125,10 @@ function ruleMatchFor(txn: Transaction): UserRule['match'] | null {
   return null;
 }
 
-async function upsertRule(
+export async function upsertRule(
   match: UserRule['match'],
   set: UserRule['set'],
-  fromTxnId: string,
+  fromTxnId?: string,
 ): Promise<UserRule> {
   const rules = await db.rules.toArray();
   const existing = rules.find(
@@ -148,7 +148,7 @@ async function upsertRule(
     id: newId(),
     match,
     set,
-    createdFromTxnId: fromTxnId,
+    ...(fromTxnId ? { createdFromTxnId: fromTxnId } : {}),
     enabled: true,
     createdAt: nowTimestamp(),
   };
@@ -290,7 +290,7 @@ function retargetKind(
 
 const BULK_MAX = 5000;
 
-async function loadSelected(txnIds: unknown): Promise<Transaction[]> {
+export async function loadSelected(txnIds: unknown): Promise<Transaction[]> {
   if (!Array.isArray(txnIds) || txnIds.length === 0) throw new ValidationError('Select at least one transaction.');
   const ids = [...new Set(txnIds.filter((i): i is string => typeof i === 'string'))];
   if (ids.length > BULK_MAX) throw new ValidationError(`Select at most ${BULK_MAX} transactions at a time.`);
@@ -480,7 +480,11 @@ export async function resetTransaction(txnId: string): Promise<void> {
 async function ruleEffectIds(...rules: UserRule[]): Promise<Set<string>> {
   const ids = new Set<string>();
   const all = await db.transactions.toArray();
-  for (const rule of rules) for (const t of all) if (ruleMatches(rule, t)) ids.add(t.id);
+  for (const rule of rules) {
+    for (const t of all) {
+      if (ruleMatches(rule, t) || (rule.set.merchantKey && t.merchantKey === rule.set.merchantKey)) ids.add(t.id);
+    }
+  }
   return ids;
 }
 
@@ -517,9 +521,12 @@ export async function deleteRule(id: string): Promise<void> {
       const changedByRule =
         (rule.set.category !== undefined && t.categorySource === 'user_rule') ||
         (rule.set.kind !== undefined && t.kindSource === 'user_rule') ||
-        (rule.set.merchant !== undefined && !t.reasons.includes(REASON_RENAMED));
+        (rule.set.merchant !== undefined && !t.reasons.includes(REASON_RENAMED)) ||
+        rule.set.merchantKey !== undefined;
       if (changedByRule) ids.add(t.id);
     }
+    // Rows that were merged under this rule's alias no longer carry the source key.
+    if (rule.set.merchantKey) for (const t of all) if (t.merchantKey === rule.set.merchantKey) ids.add(t.id);
     await db.rules.delete(id);
     await reprocessTransactions(ids);
     await retrainLearnedModel();

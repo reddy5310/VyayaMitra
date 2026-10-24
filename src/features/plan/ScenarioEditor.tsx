@@ -6,7 +6,7 @@ import type { Budget, CustomCategory, Paise } from '@/domain/types';
 import { goalProgress } from '@/engine/analytics';
 import { addMonths, monthKey, todayIso } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
-import { Badge, Button, Card, CardHeader, ConfirmDialog, Input, Money, Notice, useToast } from '@/ui';
+import { Badge, Button, Card, CardHeader, ConfirmDialog, Input, Money, Notice, Select, useToast } from '@/ui';
 import { paiseToInput, parseRupeeInput } from './amount';
 import { describeImpact, runScenario } from './scenario';
 
@@ -51,6 +51,8 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
   const [keep, setKeep] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
   const [track, setTrack] = useState(true);
+  const [goalId, setGoalId] = useState('');
+  const [toGoal, setToGoal] = useState(false);
 
   // Parse every row; an unparseable entry is an inline error and is left out of the scenario.
   const parsed = useMemo(() => {
@@ -119,6 +121,29 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
     }
     toast('Your plan was updated.', { tone: 'success' });
     onClose();
+  }
+
+  const pickedGoal = goalInputs.find((g) => g.goal.id === (goalId || goalInputs[0]?.goal.id));
+
+  async function putTowardGoal() {
+    if (!pickedGoal || result.plannedReduction <= 0) return;
+    setToGoal(true);
+    try {
+      await createSavingAction({
+        type: 'goal_contribution',
+        title: `Put ${formatINR(result.plannedReduction, { whole: true })} a month toward ${pickedGoal.goal.name}`,
+        goalId: pickedGoal.goal.id,
+        baselineMonthly: 0,
+        targetMonthly: result.plannedReduction,
+        startMonth: addMonths(monthKey(today), 1),
+        status: 'active',
+      });
+      toast(`Planned: ${formatINR(result.plannedReduction, { whole: true })} a month toward ${pickedGoal.goal.name}.`, { tone: 'success' });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not create the action.', { tone: 'error' });
+    } finally {
+      setToGoal(false);
+    }
   }
 
   const notes = result.notes;
@@ -258,6 +283,29 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
               </ul>
             </Notice>
           )}
+        </div>
+      )}
+
+      {result.plannedReduction > 0 && goalInputs.length > 0 && (
+        <div className="mt-4 rounded-xl bg-surface-2 p-3">
+          <label htmlFor="scn-goal" className="text-sm font-medium text-fg">
+            Put the difference toward a goal
+          </label>
+          <p className="text-xs text-fg-muted">
+            Plans <Money value={result.plannedReduction} whole /> a month as an extra contribution. It is a plan until deposits show up.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Select id="scn-goal" className="w-full sm:w-64" value={pickedGoal?.goal.id ?? ''} onChange={(e) => setGoalId(e.target.value)}>
+              {goalInputs.map((g) => (
+                <option key={g.goal.id} value={g.goal.id}>
+                  {g.goal.name}
+                </option>
+              ))}
+            </Select>
+            <Button variant="secondary" loading={toGoal} onClick={putTowardGoal}>
+              Plan this contribution
+            </Button>
+          </div>
         </div>
       )}
 

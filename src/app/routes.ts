@@ -9,7 +9,13 @@ export const ROUTES = {
   learning: '/learning',
   explore: '/explore',
   accounts: '/accounts',
+  review: '/review',
 } as const;
+
+/** Month-end review for a calendar month: '/review?month=YYYY-MM'. */
+export function reviewLink(month: string): string {
+  return `${ROUTES.review}?month=${month}`;
+}
 
 /** Account detail: '/accounts/<id>' (credit cards show statement cycles). */
 export function accountLink(id: string): string {

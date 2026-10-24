@@ -49,6 +49,8 @@ export interface RuleDecision {
   kind?: { value: NonNullable<UserRule['set']['kind']>; rule: UserRule };
   category?: { value: string; rule: UserRule };
   merchant?: { value: string; rule: UserRule };
+  /** Merchant alias (UserRule.set.merchantKey): group under this key. Matched on the natural key only. */
+  alias?: { value: string; rule: UserRule };
 }
 
 /** Most specific matching rule wins per field (kind / category / merchant); ties go to the earlier rule. */
@@ -62,6 +64,7 @@ export function selectRules(rules: readonly UserRule[], txn: RuleTarget): RuleDe
     if (!out.kind && rule.set.kind) out.kind = { value: rule.set.kind, rule };
     if (!out.category && rule.set.category) out.category = { value: rule.set.category, rule };
     if (!out.merchant && rule.set.merchant) out.merchant = { value: rule.set.merchant, rule };
+    if (!out.alias && rule.set.merchantKey?.trim()) out.alias = { value: rule.set.merchantKey.trim(), rule };
   }
   return out;
 }

@@ -1,6 +1,6 @@
-import { AlertTriangle, ArrowLeftRight } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Check } from 'lucide-react';
 import type { RowWarning, Statement, Transaction } from '@/domain/types';
-import type { PreviewRow } from '@/engine/import';
+import type { ImportPreview, PreviewRow } from '@/engine/import';
 import { formatDate } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, Money, cn } from '@/ui';
 import { UNCERTAIN_WARNINGS, type TransferCandidate } from './candidates';
@@ -183,6 +183,71 @@ export function TransferHints({ items, targetName }: { items: TransferCandidate[
         ))}
       </ul>
       {items.length > 6 && <p className="text-xs text-fg-muted">and {items.length - 6} more.</p>}
+    </Card>
+  );
+}
+
+function CheckLine({ ok, children }: { ok: boolean; children: string }) {
+  return (
+    <li className={cn('flex items-center gap-2 text-sm', ok ? 'text-fg' : 'text-warning')}>
+      {ok ? <Check className="h-4 w-4 text-positive" aria-hidden /> : <AlertTriangle className="h-4 w-4" aria-hidden />}
+      <span>{children}</span>
+      <span className="sr-only">{ok ? '(done)' : '(needs attention)'}</span>
+    </li>
+  );
+}
+
+/** First thing on the review step: what was understood about the statement, and what is left for the user. */
+export function ReviewReceipt({ preview, attention }: { preview: ImportPreview; attention: number }) {
+  const { parsed, account, stats } = preview;
+  const accountOk = Boolean(account.existingAccountId) || Boolean(account.proposed.mask);
+  const periodOk = Boolean(parsed.periodStart && parsed.periodEnd);
+  const status = parsed.reconciliation.status;
+  return (
+    <Card className="space-y-3" role="region" aria-label="Statement summary">
+      <h2 className="text-base font-semibold text-fg">Statement ready for review</h2>
+      <ul className="space-y-1" aria-label="What was checked">
+        <CheckLine ok={accountOk}>{accountOk ? 'Account identified' : 'Account not identified'}</CheckLine>
+        <CheckLine ok={periodOk}>{periodOk ? 'Period identified' : 'Period not found'}</CheckLine>
+        <CheckLine ok={status === 'balanced'}>
+          {status === 'balanced' ? 'Totals checked' : status === 'mismatch' ? 'Totals do not match' : 'Totals could not be checked'}
+        </CheckLine>
+      </ul>
+      <p className="text-sm font-medium text-fg">
+        {stats.new} new · {stats.duplicates} already imported · {attention} need your attention
+      </p>
+    </Card>
+  );
+}
+
+/** Category questions that share a merchant or UPI id, so one answer after import can settle them all. */
+export function SimilarGroups({ rows }: { rows: PreviewRow[] }) {
+  const groups = new Map<string, { name: string; rows: PreviewRow[] }>();
+  for (const r of rows) {
+    const key = r.understanding.counterparty.vpa ? `vpa:${r.understanding.counterparty.vpa}` : `m:${r.understanding.merchantKey}`;
+    const g = groups.get(key) ?? { name: r.understanding.merchant, rows: [] };
+    g.rows.push(r);
+    groups.set(key, g);
+  }
+  const list = [...groups.values()].sort((a, b) => b.rows.length - a.rows.length);
+  if (list.length === 0) return null;
+  return (
+    <Card className="space-y-3" role="region" aria-label="Review similar transactions together">
+      <CardHeader
+        title="Review similar transactions together"
+        subtitle="After importing, you answer once per merchant and the answer covers the whole group."
+      />
+      <ul className="divide-y divide-border text-sm">
+        {list.slice(0, 8).map((g) => (
+          <li key={g.name} className="flex items-center justify-between gap-3 py-2">
+            <span className="min-w-0 truncate font-medium text-fg">{g.name}</span>
+            <span className="shrink-0 text-xs text-fg-muted">
+              {g.rows.length} transaction{g.rows.length === 1 ? '' : 's'} · <Money value={g.rows.reduce((n, r) => n + r.row.amount, 0)} />
+            </span>
+          </li>
+        ))}
+      </ul>
+      {list.length > 8 && <p className="text-xs text-fg-muted">and {list.length - 8} more groups.</p>}
     </Card>
   );
 }

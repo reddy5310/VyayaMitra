@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CheckCircle2, Link2, RotateCcw, X } from 'lucide-react';
 import { markReviewed, resetTransaction, setTransactionNote } from '@/db/actions';
 import { useLedger, useTransaction } from '@/db/hooks';
+import { useTransactionHistory } from '@/db/review';
 import { CATEGORY_GROUP_LABELS, allCategories, categoryName } from '@/domain/categories';
 import { KIND_LABELS, USER_SELECTABLE_KINDS } from '@/domain/kinds';
 import type { CategoryGroup, Transaction, TxnKind } from '@/domain/types';
@@ -9,6 +10,8 @@ import { formatDate } from '@/lib/dates';
 import { Badge, Button, CategoryIcon, Field, IconButton, Input, Money, Notice, Select, Sheet, Spinner, Textarea, useToast } from '@/ui';
 import { CorrectionPrompt } from './CorrectionPrompt';
 import { COUNTERPARTY_LABELS, categorySourceLabel, kindSourceLabel, linkExplanation } from './labels';
+import { stateChips, useTagging } from './tagging';
+import { CombineMerchants, CorrectionHistory, StateChips, TagSelect } from './TxnExtras';
 import { errorMessage, useCorrection } from './useCorrection';
 
 function InfoRow({ label, children }: { label: string; children: ReactNode }) {
@@ -87,6 +90,9 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
   const linked = useTransaction(txn.linkedTxnId);
   const { toast } = useToast();
   const correction = useCorrection(txn, ledger.transactions);
+  const history = useTransactionHistory(txn.id);
+  const tagTransactions = useTagging();
+  const [combining, setCombining] = useState(false);
 
   const [merchantDraft, setMerchantDraft] = useState(txn.merchant);
   const [noteDraft, setNoteDraft] = useState(txn.note ?? '');
@@ -139,6 +145,10 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
             {txn.valueDate && txn.valueDate !== txn.date ? ` (value date ${formatDate(txn.valueDate)})` : ''}
           </p>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <StateChips chips={stateChips(txn, statement, history)} />
       </div>
 
       {txn.needsReview && (
@@ -196,6 +206,15 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
         </Button>
       </form>
       {correction.pending?.type === 'merchant' && <CorrectionPromptFor correction={correction} merchant={txn.merchant} />}
+      {combining ? (
+        <div className="mt-2">
+          <CombineMerchants txn={txn} allTxns={ledger.transactions} onDone={() => setCombining(false)} />
+        </div>
+      ) : (
+        <Button className="mt-2" size="sm" variant="ghost" onClick={() => setCombining(true)}>
+          Combine with another merchant…
+        </Button>
+      )}
 
       {/* What VyayaMitra understood */}
       <SectionTitle>What VyayaMitra understood</SectionTitle>
@@ -267,6 +286,10 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
         </div>
       </div>
 
+      <SectionTitle>Tag</SectionTitle>
+      <TagSelect label="Tag" current={txn.tag ?? ''} onPick={(tag) => void tagTransactions([txn], tag)} />
+      <p className="mt-1 text-xs text-fg-muted">Planned and exceptional spending stays in your totals but stops raising generic alerts.</p>
+
       {txn.reasons.length > 0 && (
         <>
           <SectionTitle>Why</SectionTitle>
@@ -305,6 +328,9 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
       >
         {txn.source.rawLines.join('\n') || txn.rawDescription}
       </pre>
+
+      <SectionTitle>Correction history</SectionTitle>
+      <CorrectionHistory events={history} custom={ledger.customCategories} />
 
       {/* Note */}
       <SectionTitle>Note</SectionTitle>

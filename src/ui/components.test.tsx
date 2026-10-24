@@ -289,7 +289,21 @@ describe('MeterBar', () => {
     const meter = screen.getByRole('meter', { name: 'Dining' });
     expect(meter).toHaveAttribute('aria-valuemax', '130');
     expect(meter).toHaveAttribute('aria-valuenow', '130');
-    expect(meter.getAttribute('aria-valuetext')).toContain('30 over');
-    expect(screen.getByText(/130 of 100, 30 over/)).toBeInTheDocument();
+    expect(meter.getAttribute('aria-valuetext')).toContain('30% over · 30 over');
+    expect(screen.getByText(/130 of 100, 30% over · 30 over/)).toBeInTheDocument();
+  });
+});
+
+describe('MeterBar over target', () => {
+  it('says how far over in percent and amount, and masks the amount when hidden', () => {
+    const { rerender } = render(<MeterBar label="Dining" value={13500} target={10000} format={(n) => `₹${n}`} />);
+    expect(screen.getByText(/35% over · ₹3500 over/)).toBeInTheDocument();
+    rerender(
+      <PrivacyContext.Provider value={{ hideAmounts: true }}>
+        <MeterBar label="Dining" value={13500} target={10000} format={(n) => `₹${n}`} />
+      </PrivacyContext.Provider>,
+    );
+    expect(screen.getByText(/35% over · •••• over/)).toBeInTheDocument();
+    expect(screen.getByRole('meter').getAttribute('aria-valuetext')).toContain('35% over');
   });
 });

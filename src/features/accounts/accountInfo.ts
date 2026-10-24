@@ -1,5 +1,5 @@
 import type { Account, AccountType, IsoDate, Statement } from '@/domain/types';
-import { addMonths, monthKey, monthsBetween, todayIso } from '@/lib/dates';
+import { addDays, addMonths, monthEnd, monthKey, monthStart, monthsBetween, todayIso } from '@/lib/dates';
 
 /** The last `count` calendar months ending with the current one. */
 export function coverageMonths(today: IsoDate = todayIso(), count = 12): string[] {
@@ -31,4 +31,26 @@ export function groupAccounts(accounts: readonly Account[]): { id: AccountGroupI
   return order
     .map((id) => ({ id, accounts: accounts.filter((a) => !a.archived && accountGroup(a.type) === id) }))
     .filter((g) => g.accounts.length > 0);
+}
+
+/** The stretches of a month that no statement of the account covers, as inclusive date ranges. */
+export function missingDayRanges(accountId: string, month: string, statements: readonly Statement[]): { start: IsoDate; end: IsoDate; days: number }[] {
+  const periods = statements.filter((s) => s.accountId === accountId && s.periodStart && s.periodEnd);
+  const out: { start: IsoDate; end: IsoDate; days: number }[] = [];
+  const last = monthEnd(month);
+  let run: { start: IsoDate; end: IsoDate; days: number } | null = null;
+  for (let d = monthStart(month); d <= last; d = addDays(d, 1)) {
+    const covered = periods.some((p) => d >= p.periodStart! && d <= p.periodEnd!);
+    if (covered) {
+      if (run) out.push(run);
+      run = null;
+    } else if (run) {
+      run.end = d;
+      run.days += 1;
+    } else {
+      run = { start: d, end: d, days: 1 };
+    }
+  }
+  if (run) out.push(run);
+  return out;
 }

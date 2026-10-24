@@ -22,6 +22,7 @@ export function ChooseFileStep({
   problems,
   onFiles,
   onTeach,
+  hint,
 }: {
   error: ErrorView | null;
   /** Offered when the file could not be read: the user can show VyayaMitra which column is which. */
@@ -29,6 +30,8 @@ export function ChooseFileStep({
   /** Files rejected before reading (too large, wrong type). */
   problems: string[];
   onFiles: (files: File[]) => void;
+  /** Why the user was sent here, e.g. a missing month in the coverage grid. */
+  hint?: string;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -45,6 +48,7 @@ export function ChooseFileStep({
 
   return (
     <div className="space-y-4">
+      {hint && <Notice tone="info">{hint}</Notice>}
       {error && (
         <Notice tone="negative" title={error.title}>
           <p>{error.body}</p>
