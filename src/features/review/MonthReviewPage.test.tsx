@@ -19,9 +19,9 @@ vi.mock('@/db/hooks', () => hooks);
 const review = vi.hoisted(() => ({
   useInsightFeedback: vi.fn(),
   useMonthReviews: vi.fn(),
-  saveMonthReview: vi.fn(),
-  setTransactionsTag: vi.fn(),
-  recordInsightFeedback: vi.fn(),
+  saveMonthReview: vi.fn((..._args: unknown[]) => Promise.resolve<unknown>(undefined)),
+  setTransactionsTag: vi.fn((..._args: unknown[]) => Promise.resolve<unknown>(undefined)),
+  recordInsightFeedback: vi.fn((..._args: unknown[]) => Promise.resolve<unknown>(undefined)),
 }));
 vi.mock('@/db/review', () => review);
 
