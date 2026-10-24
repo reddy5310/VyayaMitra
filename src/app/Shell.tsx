@@ -56,6 +56,8 @@ const ROUTE_TITLES: Record<string, string> = {
   [ROUTES.learning]: 'Learning centre',
   [ROUTES.report]: 'Report',
   [ROUTES.review]: 'Month-end review',
+  [ROUTES.moneyBack]: 'Money back',
+  [ROUTES.fees]: 'Fees & charges',
 };
 
 const BASE = import.meta.env.BASE_URL;
