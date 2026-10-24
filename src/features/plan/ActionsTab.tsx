@@ -1,16 +1,24 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Flag } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
 import { categoryName } from '@/domain/categories';
 import type { SavingAction } from '@/domain/types';
 import { updateSavingAction } from '@/db/actions';
-import { useGoalContributions, useGoals, useLedger, useSavingActions } from '@/db/hooks';
+import { useBudgets, useGoalContributions, useGoals, useLedger, useSavingActions } from '@/db/hooks';
+import { useAdviserPreferences, useCardPolicies, useChargeLinks, useRefundAllocations, useRefundCases } from '@/db/moneyback';
+import { useInsightFeedback } from '@/db/review';
 import { activityLink } from '@/app/routes';
-import { evaluateSavingActions, type ActionOutcome } from '@/engine/analytics';
-import { formatMonth, todayIso } from '@/lib/dates';
-import { Badge, Button, Card, CardHeader, EmptyState, Money, useToast, type Tone } from '@/ui';
+import { actionTotals, categoryBaselines, evaluateSavingActions, feesSummary, moneyBack, recommendations, type ActionOutcome } from '@/engine/analytics';
+import { formatMonth, monthKey, todayIso } from '@/lib/dates';
+import { Badge, Button, Card, CardHeader, Field, Input, Sheet, useToast, type Tone } from '@/ui';
+import { paiseToInput, parseRupeeInput } from './amount';
 import { errorMessage } from './errors';
-import { ActionStages, potentialMonthly } from '@/features/review/stages';
+import { MaskedText } from '@/features/overview/InsightText';
+import { SuggestionCard } from '@/features/overview/SuggestionCard';
+import { pickSuggestions } from '@/features/overview/suggestions';
+import { ActionTotalsCard } from './ActionTotalsCard';
+import { PreferencesPanel } from './PreferencesPanel';
+import { ActionStages } from '@/features/review/stages';
 import { ConfirmSheet, ListSkeleton } from './planUi';
 
 const TYPE_LABEL: Record<SavingAction['type'], string> = {
@@ -33,9 +41,17 @@ export function ActionsTab() {
   const actions = useSavingActions();
   const goals = useGoals();
   const contributions = useGoalContributions();
+  const budgets = useBudgets();
+  const cases = useRefundCases();
+  const allocations = useRefundAllocations();
+  const chargeLinks = useChargeLinks();
+  const policies = useCardPolicies();
+  const preferences = useAdviserPreferences();
+  const insightFeedback = useInsightFeedback();
   const { toast } = useToast();
   const today = useMemo(() => todayIso(), []);
   const [confirmDrop, setConfirmDrop] = useState<SavingAction | null>(null);
+  const [adjusting, setAdjusting] = useState<SavingAction | null>(null);
 
   const active = useMemo(() => (actions ?? []).filter((a) => a.status === 'active'), [actions]);
   const closed = useMemo(() => (actions ?? []).filter((a) => a.status !== 'active'), [actions]);
@@ -46,9 +62,36 @@ export function ActionsTab() {
     return new Map(list.map((o) => [o.action.id, o]));
   }, [ready, goals, contributions, active, transactions, accounts, statements, today]);
 
-  const estimatedTotal = active.reduce((s, a) => s + potentialMonthly(a), 0);
-  const achievedList = [...outcomes.values()].filter((o) => o.achievedMonthlySaving !== null);
-  const achievedTotal = achievedList.reduce((s, o) => s + Math.max(0, o.achievedMonthlySaving ?? 0), 0);
+  const adviserReady = ready && actions !== undefined && budgets !== undefined && cases !== undefined && allocations !== undefined && chargeLinks !== undefined && policies !== undefined && preferences !== undefined;
+  const recs = useMemo(
+    () =>
+      adviserReady
+        ? recommendations(transactions, {
+            accounts,
+            statements,
+            budgets: budgets ?? [],
+            actions: actions ?? [],
+            preferences: preferences ?? [],
+            feedback: insightFeedback ?? [],
+            cases: cases ?? [],
+            allocations: allocations ?? [],
+            chargeLinks: chargeLinks ?? [],
+            policies: policies ?? [],
+            today,
+            limit: 8,
+          })
+        : [],
+    [adviserReady, transactions, accounts, statements, budgets, actions, preferences, insightFeedback, cases, allocations, chargeLinks, policies, today],
+  );
+  const totals = useMemo(() => {
+    if (!adviserReady) return null;
+    return actionTotals([...outcomes.values()], {
+      actions: active,
+      moneyBack: moneyBack(transactions, { cases: cases ?? [], allocations: allocations ?? [], today }),
+      fees: feesSummary(transactions, { links: chargeLinks ?? [], policies: policies ?? [], accounts }),
+    });
+  }, [adviserReady, outcomes, active, transactions, cases, allocations, chargeLinks, policies, accounts, today]);
+  const baselines = useMemo(() => (ready ? categoryBaselines(transactions, { accounts, statements, today, months: 3 }) : []), [ready, transactions, accounts, statements, today]);
 
   async function setStatus(a: SavingAction, status: 'completed' | 'dropped') {
     await updateSavingAction(a.id, { status });
@@ -65,57 +108,35 @@ export function ActionsTab() {
 
   if (!ready || actions === undefined || goals === undefined || contributions === undefined) return <ListSkeleton />;
 
-  if (actions.length === 0) {
-    return (
-      <Card>
-        <EmptyState
-          icon={<Flag className="h-6 w-6" aria-hidden />}
-          title="No saving actions yet"
-          body="When an insight on the Overview suggests a way to spend less, start it from there. We will check it against later complete months and show what you really saved."
-        />
-      </Card>
-    );
-  }
+  const shown = pickSuggestions(recs, 5);
 
   return (
     <div className="space-y-4">
-      {active.length > 0 && (
+      {totals && <ActionTotalsCard totals={totals} />}
+
+      <section aria-labelledby="act-suggestions">
         <Card>
-          <h2 className="sr-only">Saving totals</h2>
-          <dl className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl bg-info-soft px-3 py-2.5 text-info">
-              <dt className="text-sm font-medium">Opportunity, if every target is met</dt>
-              <dd className="text-xl font-semibold">
-                <Money value={estimatedTotal} whole /> <span className="text-sm font-normal">a month</span>
-              </dd>
-              <dd className="text-xs opacity-90">A possibility, not money saved.</dd>
-            </div>
-            <div className="rounded-xl bg-surface-2 px-3 py-2.5">
-              <dt className="text-sm font-medium text-fg-muted">Recorded result in complete months</dt>
-              <dd className="text-xl font-semibold text-fg">
-                {achievedList.length > 0 ? (
-                  <>
-                    <Money value={achievedTotal} whole /> <span className="text-sm font-normal">a month lower</span>
-                  </>
-                ) : (
-                  '—'
-                )}
-              </dd>
-              <dd className="text-xs text-fg-muted">
-                {achievedList.length > 0
-                  ? `Measured on ${achievedList.length} of ${active.length} actions. Statements show the change, not what caused it.`
-                  : 'Waiting for a full month of data.'}
-              </dd>
-            </div>
-          </dl>
+          <CardHeader
+            title={<span id="act-suggestions">Suggestions</span>}
+            subtitle="Each one moves through Suggestion, Target chosen, Underway, Observed, then Keep or adjust."
+          />
+          {shown.length === 0 ? (
+            <p className="text-sm text-fg-muted">Nothing to suggest right now. Suggestions appear as more complete months of statements arrive.</p>
+          ) : (
+            <ul className="space-y-3">
+              {shown.map((r) => (
+                <SuggestionCard key={r.id} rec={r} existing={actions} today={today} />
+              ))}
+            </ul>
+          )}
         </Card>
-      )}
+      </section>
 
       <section aria-labelledby="act-active">
         <Card>
           <CardHeader title={<span id="act-active">Active actions</span>} />
           {active.length === 0 ? (
-            <p className="text-sm text-fg-muted">No active actions.</p>
+            <p className="text-sm text-fg-muted">No active actions yet. Choose a target on a suggestion above to start one.</p>
           ) : (
             <ul className="divide-y divide-border">
               {active.map((a) => (
@@ -126,6 +147,8 @@ export function ActionsTab() {
                   customCategories={customCategories}
                   onComplete={() => complete(a)}
                   onDrop={() => setConfirmDrop(a)}
+                  onAdjust={() => setAdjusting(a)}
+                  thisMonth={monthKey(today)}
                 />
               ))}
             </ul>
@@ -147,6 +170,10 @@ export function ActionsTab() {
         </details>
       )}
 
+      <PreferencesPanel preferences={preferences ?? []} baselines={baselines} customCategories={customCategories} />
+
+      {adjusting && <AdjustSheet action={adjusting} onClose={() => setAdjusting(null)} />}
+
       {confirmDrop && (
         <ConfirmSheet
           title="Drop this action?"
@@ -166,18 +193,24 @@ function ActionItem({
   customCategories,
   onComplete,
   onDrop,
+  onAdjust,
+  thisMonth,
 }: {
   action: SavingAction;
   outcome: ActionOutcome | undefined;
   customCategories: Parameters<typeof categoryName>[1];
   onComplete: () => void;
   onDrop: () => void;
+  onAdjust: () => void;
+  thisMonth: string;
 }) {
   const state = outcome ? STATE[outcome.state] : STATE.waiting_for_data;
   return (
     <li className="py-4 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <h3 className="text-sm font-semibold text-fg">{a.title}</h3>
+        <h3 className="text-sm font-semibold text-fg">
+          <MaskedText text={a.title} />
+        </h3>
         <Badge tone={state.tone}>{state.label}</Badge>
       </div>
       <p className="text-xs text-fg-subtle">
@@ -185,11 +218,15 @@ function ActionItem({
         {a.category && <> · {categoryName(a.category, customCategories)}</>} · from {formatMonth(a.startMonth)}
       </p>
 
+      <Lifecycle stage={stageOf(a, outcome, thisMonth)} />
       <ActionStages action={a} outcome={outcome} />
 
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <Button size="md" variant="secondary" icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} aria-label={`Mark ${a.title} completed`} onClick={onComplete}>
           Mark completed
+        </Button>
+        <Button size="md" variant="outline" aria-label={`Adjust target for ${a.title}`} onClick={onAdjust}>
+          Adjust target
         </Button>
         <Button size="md" variant="ghost" aria-label={`Drop ${a.title}`} onClick={onDrop}>
           Drop
@@ -204,5 +241,75 @@ function ActionItem({
         )}
       </div>
     </li>
+  );
+}
+
+const STAGES = ['Suggestion', 'Target chosen', 'Underway', 'Observed', 'Keep or adjust'] as const;
+
+/** Where an active action is in its life. A suggestion becomes an action only once a target is chosen. */
+function stageOf(a: SavingAction, o: ActionOutcome | undefined, thisMonth: string): number {
+  if (o && o.achievedMonthlySaving !== null) return o.state === 'achieved' || o.state === 'off_track' ? 4 : 3;
+  return a.startMonth > thisMonth ? 1 : 2;
+}
+
+function Lifecycle({ stage }: { stage: number }) {
+  return (
+    <ol className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs" aria-label="Where this action is">
+      {STAGES.map((label, i) => (
+        <li key={label} aria-current={i === stage ? 'step' : undefined} className={i === stage ? 'font-semibold text-primary' : i < stage ? 'text-fg' : 'text-fg-subtle'}>
+          {i + 1}. {label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function AdjustSheet({ action, onClose }: { action: SavingAction; onClose: () => void }) {
+  const { toast } = useToast();
+  const [text, setText] = useState(paiseToInput(action.targetMonthly));
+  const [error, setError] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    const p = text.trim() === '0' ? { ok: true as const, paise: 0 } : parseRupeeInput(text);
+    if (!p.ok) {
+      setError(p.error);
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateSavingAction(action.id, { targetMonthly: p.paise });
+      toast('Target adjusted.', { tone: 'success' });
+      onClose();
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet
+      open
+      onClose={onClose}
+      size="sm"
+      title="Adjust target"
+      footer={
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button className="flex-1" loading={busy} onClick={save}>
+            Save target
+          </Button>
+        </div>
+      }
+    >
+      <Field label="Monthly target (₹)" error={error}>
+        {({ id, describedBy, invalid }) => (
+          <Input id={id} inputMode="decimal" value={text} aria-describedby={describedBy} aria-invalid={invalid || undefined} onChange={(e) => { setText(e.target.value); setError(undefined); }} />
+        )}
+      </Field>
+    </Sheet>
   );
 }

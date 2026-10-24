@@ -215,15 +215,18 @@ describe('refunds', () => {
 
   it('links a card credit to the earlier purchase at the same merchant and copies the category', () => {
     const { after } = linked([purchase(), refund()]);
-    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', kindSource: 'match', linkRole: 'refund_of', linkedTxnId: 'buy', category: 'shopping' });
-    expect(byId(after, 'buy')).toMatchObject({ kind: 'expense', linkRole: 'refunded_by', linkedTxnId: 'ref' });
-    expect(byId(after, 'buy').linkId).toBe(byId(after, 'ref').linkId);
+    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', kindSource: 'match', category: 'shopping' });
+    // refunds are many-to-many: allocations own the pairing, so no one-to-one link fields are written
+    expect(byId(after, 'ref').linkId).toBeUndefined();
+    expect(byId(after, 'ref').linkedTxnId).toBeUndefined();
+    expect(byId(after, 'buy')).toMatchObject({ kind: 'expense' });
+    expect(byId(after, 'buy').linkId).toBeUndefined();
     expect(headline(after).spending).toBe(0);
   });
 
   it('handles partial refunds and keeps the net spending right', () => {
     const { after } = linked([purchase(), refund('2024-06-20', 50_000)]);
-    expect(byId(after, 'ref').linkedTxnId).toBe('buy');
+    expect(byId(after, 'ref').kind).toBe('refund');
     expect(byId(after, 'ref').reasons.join(' ')).toMatch(/partial refund/);
     expect(headline(after).spending).toBe(150_000);
   });
@@ -233,8 +236,8 @@ describe('refunds', () => {
   });
 
   it.each([
-    ['90 days later', '2024-08-30', true],
-    ['91 days later', '2024-08-31', false],
+    ['120 days later', '2024-09-29', true],
+    ['121 days later', '2024-09-30', false],
     ['before the purchase', '2024-05-30', false],
   ])('window: %s', (_label, creditDate, expected) => {
     expect(linkTransactions([purchase(), refund(creditDate)], ACCOUNTS).length > 0).toBe(expected);
@@ -251,17 +254,15 @@ describe('refunds', () => {
     const buy = understood('buy', 'UPI/412345678902/UPIIntent/myntra.payu@icici/ICICI Bank/PPPL1', 'debit', 56_800, '2024-06-08', SAVINGS);
     const ref = understood('ref', 'UPI/412345678927/Refund/myntra2.payu@hd/HDF C BANKLTD/HDF3D12', 'credit', 14_581, '2024-06-10', SAVINGS);
     const { after } = linked([buy, ref]);
-    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', linkRole: 'refund_of', linkedTxnId: 'buy', category: 'shopping' });
+    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', category: 'shopping' });
   });
 
-  it('matches each refund to a different purchase (one-to-one, closest first)', () => {
-    const a = { ...purchase('2024-06-01'), id: 'a' };
-    const b = { ...purchase('2024-06-10'), id: 'b' };
-    const r1 = { ...refund('2024-06-12'), id: 'r1' };
-    const r2 = { ...refund('2024-06-13'), id: 'r2' };
-    const { after } = linked([a, b, r1, r2]);
-    expect(byId(after, 'r1').linkedTxnId).toBe('b');
-    expect(byId(after, 'r2').linkedTxnId).toBe('a');
+  it('two refunds can both relate to the same purchase: no one-to-one exclusivity', () => {
+    const r1 = { ...refund('2024-06-12', 80_000), id: 'r1' };
+    const r2 = { ...refund('2024-06-13', 120_000), id: 'r2' };
+    const { after } = linked([purchase(), r1, r2]);
+    expect(byId(after, 'r1').kind).toBe('refund');
+    expect(byId(after, 'r2').kind).toBe('refund');
   });
 
   it('is idempotent', () => {
@@ -271,9 +272,9 @@ describe('refunds', () => {
 });
 
 describe('reversals', () => {
-  it('pairs a debit with the same amount returning within 2 days as two neutral reversal legs', () => {
-    const debit = understood('d', 'UPI-412345678922-ZZQ SHOP IN', 'debit', 5_100, '2024-07-12', CARD);
-    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-13', CARD);
+  it('pairs a debit with the same amount returning within 2 days as two neutral reversal legs when the bank reference matches', () => {
+    const debit = understood('d', 'UPI-412345678922-ZZQ SHOP IN', 'debit', 5_100, '2024-07-12', CARD, { reference: 'R9' });
+    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-13', CARD, { reference: 'R9' });
     const { after } = linked([debit, credit]);
     expect(byId(after, 'd')).toMatchObject({ kind: 'reversal', linkRole: 'reversal', linkedTxnId: 'c', kindSource: 'match', category: 'reversal' });
     expect(byId(after, 'c')).toMatchObject({ kind: 'reversal', linkRole: 'reversal', linkedTxnId: 'd' });
@@ -282,10 +283,25 @@ describe('reversals', () => {
 
   it('three days later it is a refund, not a reversal', () => {
     const debit = understood('d', 'UPI-412345678922-ZZQ SHOP IN', 'debit', 5_100, '2024-07-12', CARD);
-    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-15', CARD);
-    const { after } = linked([debit, credit]);
+    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-15', CARD, { reference: 'R9' });
+    const { after } = linked([{ ...debit, reference: 'R9' }, credit]);
     expect(byId(after, 'c').kind).toBe('refund');
-    expect(byId(after, 'c').linkRole).toBe('refund_of');
+  });
+
+  it('a genuine next-day refund at the same merchant is a refund, not a neutral reversal', () => {
+    const buy = understood('buy', 'UPI-412345678921-Amazon I ndia IN', 'debit', 200_000, '2024-06-01', CARD);
+    const ref = understood('ref', 'AMAZON INDIA', 'credit', 200_000, '2024-06-02', CARD);
+    const { after } = linked([buy, ref]);
+    expect(byId(after, 'ref').kind).toBe('refund');
+    expect(byId(after, 'buy').kind).toBe('expense');
+    expect(headline(after).spending).toBe(0);
+    expect(after.filter((t) => t.kind === 'reversal')).toHaveLength(0);
+  });
+
+  it('the same bank reference on both legs is reversal evidence', () => {
+    const debit = understood('d', 'UPI-412345678922-ZZQ SHOP IN', 'debit', 5_100, '2024-07-12', CARD, { reference: 'RRN123' });
+    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-12', CARD, { reference: 'RRN123' });
+    expect(byId(linked([debit, credit]).after, 'c').kind).toBe('reversal');
   });
 
   it('a person paying back the same amount without any reversal wording is not a reversal', () => {
@@ -303,8 +319,9 @@ describe('reversals', () => {
 
   it('is idempotent', () => {
     const debit = understood('d', 'UPI-412345678922-ZZQ SHOP IN', 'debit', 5_100, '2024-07-12', CARD);
-    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-13', CARD);
-    const { after } = linked([debit, credit]);
+    const credit = understood('c', 'ZZQ SHOP', 'credit', 5_100, '2024-07-13', CARD, { reference: 'R9' });
+    const { after } = linked([{ ...debit, reference: 'R9' }, credit]);
+    expect(byId(after, 'c').kind).toBe('reversal');
     expect(linkTransactions(after, ACCOUNTS)).toEqual([]);
   });
 });
@@ -331,7 +348,7 @@ describe('user decisions are never overridden', () => {
 
     const buy = understood('buy', 'UPI-412345678921-Amazon I ndia IN', 'debit', 200_000, '2024-06-01', CARD, { kindSource: 'user_rule', kind: 'expense' });
     const ref = understood('ref', 'AMAZON INDIA', 'credit', 200_000, '2024-06-20', CARD);
-    expect(linkTransactions([buy, ref], ACCOUNTS)).toEqual([]);
+    expect(linkTransactions([buy, ref], ACCOUNTS).map((u) => u.txnId)).not.toContain('buy');
   });
 });
 
@@ -367,7 +384,7 @@ describe('refund after an EMI purchase', () => {
     const ref = understood('ref', 'CROMA ELECTRONICS', 'credit', 4_500_000, '2025-01-22', CARD);
     expect(buy.merchantKey).toBe(ref.merchantKey);
     const { after } = linked([buy, ref]);
-    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', linkRole: 'refund_of', linkedTxnId: 'buy', category: 'shopping' });
+    expect(byId(after, 'ref')).toMatchObject({ kind: 'refund', category: 'shopping' });
   });
 });
 

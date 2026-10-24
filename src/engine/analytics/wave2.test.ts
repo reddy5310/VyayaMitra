@@ -174,9 +174,9 @@ describe('summary consumption', () => {
       makeTxn({ accountId: 'bank', date: '2025-10-03', rupees: 500 }),
     ];
     const s = summarize(txns, { accounts: [bank], statements: [st], start: '2025-10-01', end: '2025-10-31' });
-    expect(s.spending).toBe(250_000);
+    expect(s.spending).toBe(50_000);
     expect(s.peopleOut).toBe(200_000);
     expect(s.consumption).toBe(50_000);
-    expect((s.consumption ?? 0) + (s.peopleNetOut ?? 0)).toBe(s.spending);
+    expect(s.unresolved?.out).toBe(200_000);
   });
 });

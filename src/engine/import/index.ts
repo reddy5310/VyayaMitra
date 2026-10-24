@@ -11,6 +11,7 @@
  * all-tables Dexie transaction, so any throw rolls the database back to exactly what it was.
  */
 import { readAll, writeAll, db } from '@/db/db';
+import { refreshMoneyLinks } from '@/db/moneyback';
 import { bumpTemplate, scrubDraft, signatureKey, upsertTemplate } from '@/db/templates';
 import {
   buildUnderstandContext,
@@ -525,6 +526,7 @@ export async function commitImport(preview: ImportPreview, choices: CommitChoice
       if (reference) t.reference = reference;
       if (row.cardMask) t.cardMask = row.cardMask;
       if (row.bankCategory) t.bankCategory = row.bankCategory;
+      if (u.chargeType) t.chargeType = u.chargeType;
       return t;
     });
 
@@ -558,6 +560,7 @@ export async function commitImport(preview: ImportPreview, choices: CommitChoice
     // 7 ── clean up links into replaced rows, then link across the whole ledger
     await detachDeleted(removed);
     const linked = await relinkAll();
+    await refreshMoneyLinks();
 
     const insertedIds = txns.map((t) => t.id);
     const final = await db.transactions.bulkGet(insertedIds);
@@ -584,6 +587,7 @@ export async function deleteStatement(statementId: string): Promise<void> {
     await db.statements.delete(statementId);
     await detachDeleted(txns);
     await relinkAll();
+    await refreshMoneyLinks();
     await retrainLearnedModel();
   });
 }
@@ -595,7 +599,9 @@ export async function deleteStatement(statementId: string): Promise<void> {
 export async function reprocessLedger(): Promise<number> {
   return writeAll(async () => {
     await retrainLearnedModel();
-    return reprocessTransactions(null);
+    const changed = await reprocessTransactions(null);
+    await refreshMoneyLinks();
+    return changed;
   });
 }
 

@@ -78,14 +78,14 @@ describe('schema v1 -> v2 migration', () => {
 
     const v2 = new VyayaMitraDB(name);
     await v2.open();
-    expect(v2.verno).toBeGreaterThanOrEqual(2);
+    expect(v2.verno).toBeGreaterThanOrEqual(4);
     expect((await v2.transactions.toArray()).map((t) => t.id).sort()).toEqual(['old-1', 'old-2']);
     expect(await v2.accounts.count()).toBe(1);
     expect((await v2.budgets.get('b'))!.monthlyLimit).toBe(100);
     expect((await v2.meta.get('settings'))!.value).toEqual({ theme: 'dark' });
     expect(await v2.templates.count()).toBe(0);
     expect(await v2.feedback.count()).toBe(0);
-    expect((await v2.meta.get(META_MIGRATIONS))!.value).toMatchObject([{ version: 2 }, { version: 3 }]);
+    expect((await v2.meta.get(META_MIGRATIONS))!.value).toMatchObject([{ version: 2 }, { version: 3 }, { version: 4 }]);
     // the unique fingerprint index survived the upgrade
     await expect(v2.transactions.add(makeTxn({ id: 'dup', accountId: 'old-acc', fingerprint: 'f1' }))).rejects.toThrow();
     // and the new tables are usable

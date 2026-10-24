@@ -8,6 +8,7 @@
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { RefreshCw, X } from 'lucide-react';
 import { Button, IconButton, useToast } from '@/ui';
+import { isBusy, useBusy } from './busy';
 
 const Registrar = lazy(() => import('./PwaRegistrar'));
 
@@ -58,7 +59,10 @@ export function PwaProvider({ children, enabled = import.meta.env.PROD }: { chil
     () => ({
       needRefresh: report.needRefresh && !dismissed,
       offlineReady: report.offlineReady,
-      reload: report.update,
+      // Never reload under a running import or restore, even if something calls this directly.
+      reload: () => {
+        if (!isBusy()) report.update();
+      },
       dismissUpdate,
     }),
     [report, dismissed, dismissUpdate],
@@ -79,7 +83,18 @@ export function PwaProvider({ children, enabled = import.meta.env.PROD }: { chil
 /** Slim banner shown in the header when a new version is waiting. */
 export function UpdateBanner() {
   const { needRefresh, reload, dismissUpdate } = usePwa();
+  const busy = useBusy();
   if (!needRefresh) return null;
+  if (busy.length > 0) {
+    return (
+      <div role="status" className="border-t border-primary/20 bg-primary-soft text-primary print:hidden">
+        <p className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-1.5 text-sm font-medium md:px-8">
+          <RefreshCw className="h-4 w-4 shrink-0" aria-hidden />
+          <span>Update ready — will apply after your {busy.includes('restore') ? 'restore' : 'import'}.</span>
+        </p>
+      </div>
+    );
+  }
   return (
     <div role="status" className="border-t border-primary/20 bg-primary-soft text-primary print:hidden">
       <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-1.5 md:px-8">

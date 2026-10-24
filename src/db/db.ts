@@ -19,13 +19,18 @@
 import Dexie, { type Table } from 'dexie';
 import type {
   Account,
+  AdviserPreference,
   Budget,
+  CardPolicy,
+  ChargeLink,
   CustomCategory,
   FeedbackEvent,
   GoalContribution,
   InsightFeedback,
   MonthReview,
   RecurringDecision,
+  RefundAllocation,
+  RefundCase,
   SavingAction,
   SavingsGoal,
   Statement,
@@ -35,8 +40,8 @@ import type {
 } from '@/domain/types';
 
 /** Version of the stored/backup data layout. Bump together with a new Dexie `version(n)`. */
-export const DB_SCHEMA_VERSION = 3;
-export const APP_VERSION = '1.2.0';
+export const DB_SCHEMA_VERSION = 4;
+export const APP_VERSION = '1.3.0';
 
 /** Key/value store: `settings` (AppSettings) and `learnedModel` (opaque JSON from the understand module). */
 export interface MetaRecord {
@@ -66,6 +71,11 @@ export class VyayaMitraDB extends Dexie {
   feedback!: Table<FeedbackEvent, string>;
   insightFeedback!: Table<InsightFeedback, string>;
   monthReviews!: Table<MonthReview, string>;
+  refundCases!: Table<RefundCase, string>;
+  refundAllocations!: Table<RefundAllocation, string>;
+  chargeLinks!: Table<ChargeLink, string>;
+  cardPolicies!: Table<CardPolicy, string>;
+  adviserPreferences!: Table<AdviserPreference, string>;
   meta!: Table<MetaRecord, string>;
 
   constructor(name = 'vyayamitra') {
@@ -110,6 +120,21 @@ export class VyayaMitraDB extends Dexie {
         const log = ((await meta.get(META_MIGRATIONS))?.value as { version: number; at: string }[] | undefined) ?? [];
         await meta.put({ key: META_MIGRATIONS, value: [...log, { version: 3, at: new Date().toISOString() }] });
       });
+    // v4 — money back & charges: refund cases + allocations, charge links, card terms, adviser preferences.
+    // Transaction.chargeType is a plain property (filled the next time a row is re-understood).
+    this.version(4)
+      .stores({
+        refundCases: 'id, state, merchantKey',
+        refundAllocations: 'id, caseId, creditTxnId, purchaseTxnId',
+        chargeLinks: 'id, groupId, txnId',
+        cardPolicies: 'id, accountId',
+        adviserPreferences: 'category',
+      })
+      .upgrade(async (tx) => {
+        const meta = tx.table<MetaRecord, string>('meta');
+        const log = ((await meta.get(META_MIGRATIONS))?.value as { version: number; at: string }[] | undefined) ?? [];
+        await meta.put({ key: META_MIGRATIONS, value: [...log, { version: 4, at: new Date().toISOString() }] });
+      });
   }
 }
 
@@ -132,11 +157,28 @@ export function readSampleFlag(): boolean {
  */
 export let db = new VyayaMitraDB(readSampleFlag() ? SAMPLE_DB_NAME : PERSONAL_DB_NAME);
 
+type ResetPhase = 'before' | 'after';
+const resetListeners = new Set<(phase: ResetPhase) => void>();
+
+/**
+ * Shared live stores (store.ts) register here so they can drop their subscriptions before the
+ * database is closed or swapped, and re-subscribe afterwards.
+ */
+export function onDatabaseReset(listener: (phase: ResetPhase) => void): void {
+  resetListeners.add(listener);
+}
+
+function notifyReset(phase: ResetPhase): void {
+  for (const l of resetListeners) l(phase);
+}
+
 /** Close the active database (data stays on disk) and make `name` the active one. */
 export function switchDatabase(name: string): VyayaMitraDB {
   if (db.name !== name) {
+    notifyReset('before');
     db.close();
     db = new VyayaMitraDB(name);
+    notifyReset('after');
   }
   return db;
 }
@@ -153,7 +195,9 @@ export function readAll<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Test helper: drop and recreate the database so each test starts empty. */
 export async function resetDatabaseForTests(): Promise<void> {
+  notifyReset('before');
   db.close();
   await db.delete();
   await db.open();
+  notifyReset('after');
 }

@@ -9,16 +9,18 @@
  *   2. own-account debit ↔ own-account credit (±3 days, same amount, with a hint) → self_transfer pair;
  *      a weak hint (only p2p_out ↔ p2p_in) needs the same or next day and ≥ ₹500
  *   3. bank debit ↔ credit-card credit (±5 days, same amount)             → card_payment pair
- *   4. same-account debit ↔ later credit (≤ 2 days, same amount & merchantKey)     → reversal pair
+ *   4. same-account debit ↔ later credit (≤ 2 days, same amount & merchantKey) AND evidence of failure/reversal
+ *      (FAILED, REVERSAL, REV, declined, or the same reference)           → reversal pair. No evidence → a refund.
  *   6. (flag only) three or more ₹40,000+ near-limit card payments through gateways within a week get a review reason
- *   5. credit with refund signals / on a card ↔ earlier debit at the same merchant (≤ 90 days,
- *      credit ≤ debit)                                                    → refund_of / refunded_by
+ *   5. credit with refund signals / on a card, with a purchase at the same merchant in the previous 120 days
+ *      → kind 'refund' + the purchase's category. NO link fields: refunds are many-to-many and owned by
+ *      `proposeRefundAllocations` (RefundAllocation), not by one-to-one links.
  *
  * A transaction is only touched if it has no link yet and its kindSource is not 'user'/'user_rule', so a
  * second run over the patched ledger returns no updates.
  */
 import { KIND_DEFAULT_CATEGORY, UNCATEGORIZED } from '@/domain/categories';
-import type { Account, CategorySource, LinkRole, Transaction, TxnKind } from '@/domain/types';
+import type { Account, CategorySource, ChargeLink, ChargeType, LinkRole, RefundAllocation, RefundCase, Transaction, TxnKind } from '@/domain/types';
 import { daysBetween } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
 import { GATEWAY_PREFIX } from '@/engine/understand/grammars';
@@ -51,7 +53,7 @@ const WEAK_HINT_WINDOW_DAYS = 1;
 const WEAK_HINT_MIN_AMOUNT = 50_000;
 const CARD_PAYMENT_WINDOW_DAYS = 5;
 const REVERSAL_WINDOW_DAYS = 2;
-const REFUND_WINDOW_DAYS = 90;
+const REFUND_WINDOW_DAYS = 120;
 const PAIR_CONFIDENCE = 0.9;
 
 /** Review flag for bursts of large, near-limit card payments through payment gateways (no judgement, just a flag). */
@@ -62,7 +64,8 @@ const GATEWAY_BURST_WINDOW_DAYS = 7;
 const GATEWAY_BURST_MIN_ROWS = 3;
 
 const REFUND_SIGNAL = /\b(?:REFUND(?:ED)?|REVERS(?:AL|ED|E)|CASH ?BACK|CHARGEBACK|FAILED|RETURN(?:ED)?|CANCEL(?:L?ED)?|REV)\b/i;
-const REVERSAL_SIGNAL = /\b(?:REVERS(?:AL|ED|E)|REFUND(?:ED)?|FAILED|RETURN(?:ED)?|CANCEL(?:L?ED)?|REV|UNSUCCESS(?:FUL)?)\b/i;
+/** Evidence that a credit undoes a failed/reversed debit (a plain "refund" is NOT evidence: that is money back). */
+const REVERSAL_EVIDENCE = /\b(?:REVERS(?:AL|ED|E)|FAILED|REV|DECLINED|UNSUCCESS(?:FUL)?|AUTO ?REV)\b/i;
 const CARD_REFUND_TRANSFER = /REFUND AMT TRANSFER|AMT TRANSFER TO BANK|CREDIT BALANCE REFUND|REFUND TO BANK/i;
 
 const SPENDING_DEBIT_KINDS: ReadonlySet<TxnKind> = new Set<TxnKind>(['expense', 'p2p_out', 'unknown', 'fee']);
@@ -247,7 +250,9 @@ export function linkTransactions(txns: readonly Transaction[], accounts: readonl
     );
   }
 
-  // ── 4. reversal: debit then the same amount back within two days ────────────────────────────
+  // ── 4. reversal: debit then the same amount back within two days, WITH evidence ─────────────
+  // Evidence = failure/reversal wording, or the same bank reference on both legs. A plain next-day credit
+  // from the same merchant (a genuine refund) is not a reversal; stage 5 treats it as a refund.
   {
     const creditKinds: ReadonlySet<TxnKind> = new Set<TxnKind>(['refund', 'reversal', 'unknown', 'p2p_in']);
     const byKey = groupBy(
@@ -260,9 +265,10 @@ export function linkTransactions(txns: readonly Transaction[], accounts: readonl
       for (const d of byKey.get(`${c.accountId}|${c.amount}|${c.merchantKey}`) ?? []) {
         const gap = daysBetween(d.date, c.date);
         if (gap < 0 || gap > REVERSAL_WINDOW_DAYS) continue;
-        const person = d.counterparty.type === 'person' || c.counterparty.type === 'person';
-        if (person && !REVERSAL_SIGNAL.test(c.rawDescription)) continue;
-        cands.push({ a: d, b: c, gap, strength: REVERSAL_SIGNAL.test(c.rawDescription) || c.kind === 'refund' || c.kind === 'reversal' ? 1 : 0 });
+        const sameRef = !!d.reference && d.reference === c.reference;
+        const wording = REVERSAL_EVIDENCE.test(c.rawDescription) || REVERSAL_EVIDENCE.test(d.rawDescription);
+        if (!sameRef && !wording) continue;
+        cands.push({ a: d, b: c, gap, strength: (sameRef ? 2 : 0) + (wording ? 1 : 0) });
       }
     }
     assign(cands, (c) =>
@@ -277,31 +283,31 @@ export function linkTransactions(txns: readonly Transaction[], accounts: readonl
     );
   }
 
-  // ── 5. refund: credit ↔ earlier purchase at the same merchant ───────────────────────────────
+  // ── 5. refund: credit with an earlier purchase at the same merchant → kind 'refund' + category ─
+  // Many-to-many: no exclusivity and no link fields. Which purchase a credit settles is decided by
+  // proposeRefundAllocations. A credit already marked by this stage is left alone (idempotent).
   {
-    const refundCredits = credits.filter((t) => {
-      if (!t.merchantKey) return false;
+    const refundCredits = txns.filter((t) => {
+      if (t.direction !== 'credit' || !t.merchantKey || isLocked(t) || patches.has(t.id)) return false;
+      if (t.linkId || (t.kind === 'refund' && t.kindSource === 'match')) return false;
       if (t.kind === 'refund' || t.kind === 'unknown') return true;
       if (typeOf(t) === 'credit_card' && t.kind !== 'card_payment' && t.kind !== 'self_transfer') return true;
       return REFUND_SIGNAL.test(t.rawDescription) && ['p2p_in', 'income'].includes(t.kind);
     });
     const byKey = groupBy(
-      debits.filter((t) => SPENDING_DEBIT_KINDS.has(t.kind) && t.merchantKey),
+      txns.filter((t) => t.direction === 'debit' && SPENDING_DEBIT_KINDS.has(t.kind) && t.merchantKey),
       (t) => `${t.accountId}|${t.merchantKey}`,
     );
-    const cands: Candidate[] = [];
-    for (const c of refundCredits) {
-      for (const d of byKey.get(`${c.accountId}|${c.merchantKey}`) ?? []) {
-        const gap = daysBetween(d.date, c.date);
-        if (gap < 0 || gap > REFUND_WINDOW_DAYS || d.amount < c.amount) continue;
-        // exact-amount refunds first, then the smallest remaining difference
-        const strength = 1000000 - Math.min(999999, d.amount - c.amount);
-        cands.push({ a: d, b: c, gap, strength });
-      }
-    }
-    assign(cands, (cand) => {
-      const { a: original, b: credit } = cand;
-      const linkId = linkIdOf(original, credit);
+    for (const credit of refundCredits) {
+      const purchases = (byKey.get(`${credit.accountId}|${credit.merchantKey}`) ?? []).filter((d) => {
+        const gap = daysBetween(d.date, credit.date);
+        return gap >= 0 && gap <= REFUND_WINDOW_DAYS;
+      });
+      const total = purchases.reduce((s, d) => s + d.amount, 0);
+      if (purchases.length === 0 || credit.amount > total) continue;
+      // the purchase that best explains the credit: smallest purchase that covers it, else the largest
+      const covering = purchases.filter((d) => d.amount >= credit.amount).sort((x, y) => x.amount - y.amount || y.date.localeCompare(x.date));
+      const original = covering[0] ?? [...purchases].sort((x, y) => y.amount - x.amount)[0];
       const copyCategory = original.category !== UNCATEGORIZED;
       const category = copyCategory ? original.category : credit.category !== UNCATEGORIZED ? credit.category : KIND_DEFAULT_CATEGORY.refund;
       const categorySource: CategorySource = copyCategory
@@ -316,19 +322,11 @@ export function linkTransactions(txns: readonly Transaction[], accounts: readonl
         category,
         categorySource,
         confidence: Math.max(credit.confidence, 0.85),
-        linkId,
-        linkRole: 'refund_of',
-        linkedTxnId: original.id,
-        reasons: [...credit.reasons, `${partial}refund of the ${formatINR(original.amount)} purchase on ${original.date} (${original.merchant || 'same merchant'})`],
+        reasons: [...credit.reasons, `${partial}refund of a ${formatINR(original.amount)} purchase on ${original.date} (${original.merchant || 'same merchant'})`],
         needsReview: category === UNCATEGORIZED,
         reviewReasons: category === UNCATEGORIZED ? ['No category matched'] : [],
       });
-      patches.set(original.id, {
-        linkId,
-        linkRole: 'refunded_by',
-        linkedTxnId: credit.id,
-      });
-    });
+    }
   }
 
   // ── 6. flag bursts of large near-limit gateway payments on a card (review reason only) ───────
@@ -353,4 +351,250 @@ export function linkTransactions(txns: readonly Transaction[], accounts: readonl
   }
 
   return txns.filter((t) => patches.has(t.id)).map((t) => ({ txnId: t.id, patch: patches.get(t.id)! }));
+}
+
+// ─── Wave 8: money back & charges (contracts) ────────────────────────────────
+
+export interface RefundProposal {
+  /** New auto allocations (never over-allocating a credit or a case). */
+  allocations: Omit<RefundAllocation, 'id' | 'createdAt'>[];
+  /** Cases to create for credits matched to a purchase with no case yet (expectedSource 'unknown'). */
+  newCases: (Omit<RefundCase, 'id' | 'createdAt' | 'updatedAt'> & { tempKey: string })[];
+  /** For newCases, allocations reference `tempKey` in caseId. */
+  /** Refund credits with several plausible purchases: the user must choose. */
+  ambiguous: { creditTxnId: string; candidatePurchaseIds: string[]; reason: string }[];
+  /** Refund-like credits with no plausible purchase in the imported statements. */
+  unmatched: string[];
+}
+
+/** Credits can settle a purchase up to this many days after it. */
+const ALLOCATION_WINDOW_DAYS = 120;
+const PURCHASE_KINDS: ReadonlySet<TxnKind> = new Set<TxnKind>(['expense', 'unknown']);
+
+/** Combinations (2 or 3 items) whose remaining amounts add up exactly to `target`. */
+function sumTo(target: number, items: readonly { id: string; left: number }[]): string[][] {
+  const out: string[][] = [];
+  const walk = (start: number, picked: string[], sum: number) => {
+    if (sum === target && picked.length >= 2) out.push([...picked]);
+    if (picked.length >= 3 || sum >= target) return;
+    for (let i = start; i < items.length; i++) walk(i + 1, [...picked, items[i].id], sum + items[i].left);
+  };
+  walk(0, [], 0);
+  return out;
+}
+
+/**
+ * Many-to-many refund matching: several credits can settle one purchase, one credit can be split across
+ * purchases only when the sums are exact. Existing allocations (user or auto) are kept and counted, so a
+ * credit amount is never used twice and a purchase is never over-allocated.
+ */
+export function proposeRefundAllocations(
+  txns: readonly Transaction[],
+  ctx: { cases: readonly RefundCase[]; allocations: readonly RefundAllocation[] },
+): RefundProposal {
+  const creditUsed = new Map<string, number>();
+  const purchaseUsed = new Map<string, number>();
+  for (const a of ctx.allocations) {
+    creditUsed.set(a.creditTxnId, (creditUsed.get(a.creditTxnId) ?? 0) + a.amount);
+    if (a.purchaseTxnId) purchaseUsed.set(a.purchaseTxnId, (purchaseUsed.get(a.purchaseTxnId) ?? 0) + a.amount);
+  }
+  const caseOfPurchase = new Map<string, string>();
+  for (const c of ctx.cases) for (const id of c.purchaseTxnIds) if (!caseOfPurchase.has(id)) caseOfPurchase.set(id, c.id);
+
+  const purchasesByKey = groupBy(
+    txns.filter((t) => t.direction === 'debit' && PURCHASE_KINDS.has(t.kind) && t.merchantKey && t.category !== 'fees_charges'),
+    (t) => t.merchantKey,
+  );
+  const credits = txns
+    .filter((t) => {
+      if (t.direction !== 'credit' || !t.merchantKey || t.linkRole === 'reversal' || t.kind === 'reversal') return false;
+      if (t.category === 'fees_charges') return false;
+      if (t.kind === 'refund' || t.kind === 'unknown') return true;
+      return REFUND_SIGNAL.test(t.rawDescription) && ['p2p_in', 'income'].includes(t.kind);
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : 1));
+
+  const out: RefundProposal = { allocations: [], newCases: [], ambiguous: [], unmatched: [] };
+  const newCaseFor = new Map<string, string>();
+  const left = (p: Transaction) => p.amount - (purchaseUsed.get(p.id) ?? 0);
+
+  function allocate(credit: Transaction, purchase: Transaction, amount: number, why: string): void {
+    let caseId = caseOfPurchase.get(purchase.id) ?? newCaseFor.get(purchase.id);
+    if (!caseId) {
+      caseId = `new:${purchase.id}`;
+      newCaseFor.set(purchase.id, caseId);
+      out.newCases.push({
+        tempKey: caseId,
+        purchaseTxnIds: [purchase.id],
+        merchant: purchase.merchant,
+        merchantKey: purchase.merchantKey,
+        expectedSource: 'unknown',
+        state: 'open',
+      });
+    }
+    out.allocations.push({
+      caseId,
+      creditTxnId: credit.id,
+      purchaseTxnId: purchase.id,
+      amount,
+      source: 'auto',
+      reason: `${formatINR(amount)} of the ${formatINR(purchase.amount)} ${purchase.merchant || 'purchase'} on ${purchase.date}: ${why}`,
+    });
+    creditUsed.set(credit.id, (creditUsed.get(credit.id) ?? 0) + amount);
+    purchaseUsed.set(purchase.id, (purchaseUsed.get(purchase.id) ?? 0) + amount);
+  }
+
+  for (const credit of credits) {
+    const remaining = credit.amount - (creditUsed.get(credit.id) ?? 0);
+    if (remaining <= 0) continue;
+    const candidates = (purchasesByKey.get(credit.merchantKey) ?? []).filter((p) => {
+      const gap = daysBetween(p.date, credit.date);
+      return gap >= 0 && gap <= ALLOCATION_WINDOW_DAYS && left(p) > 0;
+    });
+    if (candidates.length === 0) {
+      out.unmatched.push(credit.id);
+      continue;
+    }
+    const fits = candidates.filter((p) => left(p) >= remaining);
+    if (fits.length === 1) {
+      allocate(credit, fits[0], remaining, 'same merchant, credited after the purchase');
+      continue;
+    }
+    if (fits.length > 1) {
+      const exact = fits.filter((p) => left(p) === remaining);
+      if (exact.length === 1) allocate(credit, exact[0], remaining, 'exact amount');
+      else
+        out.ambiguous.push({
+          creditTxnId: credit.id,
+          candidatePurchaseIds: fits.map((p) => p.id),
+          reason: `${formatINR(remaining)} from ${credit.merchant || 'this merchant'} could settle any of ${fits.length} purchases: choose which one`,
+        });
+      continue;
+    }
+    // no single purchase can take it all: only an exact sum of purchases is strong enough to split
+    const sums = sumTo(remaining, candidates.map((p) => ({ id: p.id, left: left(p) })));
+    if (sums.length === 1) {
+      for (const id of sums[0]) {
+        const p = candidates.find((x) => x.id === id)!;
+        allocate(credit, p, left(p), 'the credit equals these purchases exactly');
+      }
+    } else if (sums.length > 1) {
+      out.ambiguous.push({
+        creditTxnId: credit.id,
+        candidatePurchaseIds: [...new Set(sums.flat())],
+        reason: `${formatINR(remaining)} matches several combinations of purchases: choose how to split it`,
+      });
+    } else {
+      out.unmatched.push(credit.id);
+    }
+  }
+  // A purchase whose credits now cover it in full needs no confirmation: it was refunded in full.
+  const txnById = new Map(txns.map((t) => [t.id, t]));
+  for (const nc of out.newCases) {
+    const purchase = txnById.get(nc.purchaseTxnIds[0]);
+    if (purchase && left(purchase) <= 0) {
+      nc.expectedSource = 'full_purchase';
+      nc.expectedAmount = purchase.amount;
+      nc.state = 'closed';
+      nc.closedReason = 'received';
+    }
+  }
+  return out;
+}
+
+const GST_RATE = 0.18;
+
+function isTaxRow(t: Transaction): boolean {
+  return t.merchantKey.startsWith('charge:gst:') || /^GST on /i.test(t.merchant) || /\b(?:I|C|S|UT)?GST\b/i.test(t.rawDescription);
+}
+const taxFits = (charge: number, tax: number): boolean => Math.abs(tax - Math.round(charge * GST_RATE)) <= 1;
+
+/**
+ * Group fee components into charge events: charge ↔ its tax ↔ reversal(s) ↔ related purchase
+ * (e.g. fuel purchase → 1% surcharge → GST on surcharge → surcharge reversed). Keeps user links:
+ * transactions already linked are never regrouped, and a group the user built is left as is.
+ * Returns only NEW links (a repeat run over the result returns []).
+ */
+export function linkCharges(txns: readonly Transaction[], existing: readonly ChargeLink[]): Omit<ChargeLink, 'id'>[] {
+  const linked = new Set(existing.map((l) => l.txnId));
+  const groupOf = new Map(existing.map((l) => [l.txnId, l.groupId]));
+  const userGroups = new Set(existing.filter((l) => l.source === 'user').map((l) => l.groupId));
+  const rows = txns.filter((t) => t.chargeType && !linked.has(t.id));
+  const used = new Set<string>();
+  const out: Omit<ChargeLink, 'id'>[] = [];
+  const byDate = (a: Transaction, b: Transaction) => a.date.localeCompare(b.date) || (a.id < b.id ? -1 : 1);
+
+  const charges = rows.filter((t) => t.direction === 'debit' && !isTaxRow(t)).sort(byDate);
+  const taxes = rows.filter((t) => t.direction === 'debit' && isTaxRow(t)).sort(byDate);
+  const reversals = rows.filter((t) => t.direction === 'credit' && !isTaxRow(t)).sort(byDate);
+  const taxReversals = rows.filter((t) => t.direction === 'credit' && isTaxRow(t)).sort(byDate);
+  // a tax row carries the fee's type; a plain "IGST" row (generic type) can tax any fee on the same account
+  const sameKind = (a: Transaction, b: Transaction) =>
+    a.accountId === b.accountId && (a.chargeType === b.chargeType || b.merchantKey === 'charge:gst:other_fee' || b.merchantKey === 'charge:gst:bank_charge');
+  const take = (list: Transaction[], ok: (t: Transaction) => boolean): Transaction | undefined => {
+    const hit = list.find((t) => !used.has(t.id) && ok(t));
+    if (hit) used.add(hit.id);
+    return hit;
+  };
+  const push = (groupId: string, t: Transaction, chargeType: ChargeType, role: ChargeLink['role'], reason: string): Omit<ChargeLink, 'id'> => {
+    const link: Omit<ChargeLink, 'id'> = { groupId, txnId: t.id, chargeType, role, source: 'auto', reason };
+    out.push(link);
+    return link;
+  };
+  const within = (from: string, to: string, max: number) => {
+    const g = daysBetween(from, to);
+    return g >= 0 && g <= max;
+  };
+
+  for (const charge of charges) {
+    if (used.has(charge.id)) continue;
+    used.add(charge.id);
+    const type = charge.chargeType!;
+    const existingGroup = groupOf.get(charge.id);
+    if (existingGroup && userGroups.has(existingGroup)) continue;
+    const groupId = existingGroup ?? `charge:${charge.id}`;
+
+    const head = push(groupId, charge, type, 'charge', `${formatINR(charge.amount)} ${charge.merchant || type} on ${charge.date}`);
+
+    const tax = take(taxes, (t) => sameKind(charge, t) && within(charge.date, t.date, 1) && taxFits(charge.amount, t.amount));
+    if (tax) push(groupId, tax, type, 'tax', `GST ${formatINR(tax.amount)} is about 18% of the ${formatINR(charge.amount)} charge`);
+
+    const rev = take(reversals, (t) => sameKind(charge, t) && within(charge.date, t.date, 90) && t.amount <= charge.amount);
+    if (rev) {
+      push(groupId, rev, type, 'reversal', `${formatINR(rev.amount)} of the ${formatINR(charge.amount)} charge was reversed on ${rev.date}`);
+      if (tax) {
+        const taxRev = take(taxReversals, (t) => sameKind(charge, t) && within(tax.date, t.date, 90) && taxFits(rev.amount, t.amount));
+        if (taxRev) push(groupId, taxRev, type, 'tax_reversal', `GST of ${formatINR(taxRev.amount)} was reversed on ${taxRev.date}`);
+      }
+    }
+
+    if (type === 'fuel_surcharge') {
+      // the fuel purchase this ~1% surcharge belongs to: same or previous day, same account, one clear match
+      const near = txns.filter(
+        (p) =>
+          p.direction === 'debit' &&
+          !p.chargeType &&
+          p.kind === 'expense' &&
+          p.accountId === charge.accountId &&
+          within(p.date, charge.date, 1) &&
+          Math.abs(charge.amount - Math.round(p.amount * 0.01)) <= 2,
+      );
+      const sameDay = near.filter((p) => p.date === charge.date);
+      const pick = sameDay.length > 0 ? sameDay : near;
+      if (pick.length === 1) {
+        head.relatedPurchaseTxnId = pick[0].id;
+        head.reason += `, about 1% of the ${formatINR(pick[0].amount)} purchase at ${pick[0].merchant}`;
+      }
+    }
+  }
+
+  // tax or reversal rows with no charge to attach to still form their own group
+  for (const t of [...taxes, ...reversals, ...taxReversals]) {
+    if (used.has(t.id)) continue;
+    used.add(t.id);
+    const tax = isTaxRow(t);
+    const role: ChargeLink['role'] = t.direction === 'debit' ? 'tax' : tax ? 'tax_reversal' : 'reversal';
+    push(`charge:${t.id}`, t, t.chargeType!, role, 'No matching charge found in the imported statements');
+  }
+  return out;
 }

@@ -135,14 +135,14 @@ describe('compareSpending', () => {
     expect(c.steps.length).toBeGreaterThan(0);
   });
 
-  it('nets unclassified people flows like the summary does', () => {
+  it('leaves unresolved people flows out of the comparison', () => {
     const txns = [
       spend('2025-09-05', 1000, { kind: 'p2p_out', category: 'sent_to_people' }),
       spend('2025-09-06', 400, { kind: 'p2p_in', category: 'received_from_people', direction: 'credit' }),
     ];
     const c = compareSpending(txns, ctx);
-    expect(c.current.total).toBe(60_000);
-    expect(c.steps[0]).toMatchObject({ key: 'sent_to_people', delta: 60_000 });
+    expect(c.current.total).toBe(0);
+    expect(c.steps).toEqual([]);
   });
 });
 
@@ -200,7 +200,7 @@ describe('moneyFlow', () => {
     expect(get(f.links, 'acct:bank', 'group:essentials')).toBe(300_000);
     expect(get(f.links, 'acct:card', 'group:lifestyle')).toBe(80_000);
     expect(get(f.links, 'acct:bank', 'saving')).toBe(500_000);
-    expect(get(f.links, 'acct:bank', 'people_out')).toBe(150_000); // 2,500 sent - 1,000 received
+    expect(get(f.links, 'acct:bank', 'people_out')).toBe(250_000); // 2,500 sent, shown gross and not yet classified
     expect(f.links.some((l) => l.to === 'acct:card')).toBe(false);
     expect(f.links.some((l) => l.from === 'acct:sav' || l.to === 'acct:sav')).toBe(false);
     expect(f.nodes.find((n) => n.id === 'acct:card')?.kind).toBe('card');

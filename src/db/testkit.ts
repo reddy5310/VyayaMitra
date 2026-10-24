@@ -4,9 +4,12 @@
  */
 import type {
   Account,
+  ChargeLink,
   FeedbackEvent,
   ParsedRow,
   ParsedStatement,
+  RefundAllocation,
+  RefundCase,
   TemplateDraft,
   Transaction,
   UserRule,
@@ -63,6 +66,7 @@ export function fakeUnderstand(input: UnderstandInput, ctx: UnderstandContext): 
     u.needsReview = false;
     u.reviewReasons = [];
   }
+  if (/ANNUAL FEE/i.test(input.description)) u.chargeType = 'annual_fee';
   const probe = { accountId: ctx.account.id, direction: input.direction, merchantKey: key, counterparty: u.counterparty, rawDescription: input.description };
   for (const rule of ctx.rules) {
     if (!fakeRuleMatches(rule, probe)) continue;
@@ -112,6 +116,59 @@ export function makeDraft(over: Partial<TemplateDraft> = {}): TemplateDraft {
     amountStyle: 'split',
     ...over,
   };
+}
+
+/**
+ * Fake refund matcher: a credit whose description contains REFUND settles the single debit with the same
+ * merchant key; several candidates are reported as ambiguous. Honours existing allocations.
+ */
+export function fakeProposeRefunds(
+  txns: readonly Transaction[],
+  ctx: { cases: readonly RefundCase[]; allocations: readonly RefundAllocation[] },
+) {
+  const out = {
+    allocations: [] as Omit<RefundAllocation, 'id' | 'createdAt'>[],
+    newCases: [] as (Omit<RefundCase, 'id' | 'createdAt' | 'updatedAt'> & { tempKey: string })[],
+    ambiguous: [] as { creditTxnId: string; candidatePurchaseIds: string[]; reason: string }[],
+    unmatched: [] as string[],
+  };
+  const used = new Map<string, number>();
+  for (const a of ctx.allocations) used.set(a.creditTxnId, (used.get(a.creditTxnId) ?? 0) + a.amount);
+  for (const credit of txns.filter((t) => t.direction === 'credit' && /REFUND/i.test(t.rawDescription))) {
+    const left = credit.amount - (used.get(credit.id) ?? 0);
+    if (left <= 0) continue;
+    const candidates = txns.filter((p) => p.direction === 'debit' && p.merchantKey === credit.merchantKey);
+    if (candidates.length === 0) out.unmatched.push(credit.id);
+    else if (candidates.length > 1) out.ambiguous.push({ creditTxnId: credit.id, candidatePurchaseIds: candidates.map((c) => c.id), reason: 'several purchases' });
+    else {
+      const purchase = candidates[0];
+      const existing = ctx.cases.find((c) => c.purchaseTxnIds.includes(purchase.id));
+      const caseId = existing?.id ?? `new:${purchase.id}`;
+      if (!existing && !out.newCases.some((n) => n.tempKey === caseId)) {
+        out.newCases.push({
+          tempKey: caseId,
+          purchaseTxnIds: [purchase.id],
+          merchant: purchase.merchant,
+          merchantKey: purchase.merchantKey,
+          expectedSource: 'unknown',
+          state: 'open',
+        });
+      }
+      out.allocations.push({ caseId, creditTxnId: credit.id, purchaseTxnId: purchase.id, amount: Math.min(left, purchase.amount), source: 'auto', reason: 'Same merchant' });
+    }
+  }
+  return out;
+}
+
+/** Fake charge linker: every transaction with a chargeType becomes its own charge group; keeps user links. */
+export function fakeLinkCharges(txns: readonly Transaction[], existing: readonly ChargeLink[]): Omit<ChargeLink, 'id'>[] {
+  const out: Omit<ChargeLink, 'id'>[] = existing.filter((l) => l.source === 'user').map(({ id: _id, ...rest }) => rest);
+  for (const t of txns) {
+    if (t.chargeType && !out.some((l) => l.txnId === t.id)) {
+      out.push({ groupId: `g-${t.id}`, txnId: t.id, chargeType: t.chargeType, role: 'charge', source: 'auto', reason: 'Fee' });
+    }
+  }
+  return out;
 }
 
 /** Fake matcher: links a 'XFEROUT' debit with the 'XFERIN' credit of the same amount. Idempotent. */

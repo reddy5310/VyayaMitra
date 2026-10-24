@@ -17,6 +17,17 @@ const hooks = vi.hoisted(() => ({
 }));
 vi.mock('@/db/hooks', () => hooks);
 
+const moneyback = vi.hoisted(() => ({
+  useRefundCases: vi.fn(() => []),
+  useRefundAllocations: vi.fn(() => []),
+  useChargeLinks: vi.fn(() => []),
+  useCardPolicies: vi.fn(() => []),
+  useAdviserPreferences: vi.fn(() => []),
+  setAdviserPreference: vi.fn(),
+}));
+vi.mock('@/db/moneyback', () => moneyback);
+vi.mock('@/db/review', () => ({ useInsightFeedback: () => [] }));
+
 const actions = vi.hoisted(() => ({
   upsertBudget: vi.fn(),
   deleteBudget: vi.fn(),
@@ -46,6 +57,10 @@ const analytics = vi.hoisted(() => ({
   evaluateSavingActions: vi.fn(),
   upcomingCardDues: vi.fn(),
   dataStatus: vi.fn(),
+  recommendations: vi.fn(),
+  actionTotals: vi.fn(),
+  moneyBack: vi.fn(),
+  feesSummary: vi.fn(),
   planScenario: vi.fn<(input: Parameters<typeof import('@/engine/analytics').planScenario>[0]) => import('@/engine/analytics').ScenarioResult>(() => ({
     currentPlanTotal: 2_000_000,
     scenarioPlanTotal: 1_800_000,
@@ -143,14 +158,25 @@ beforeEach(() => {
   analytics.evaluateSavingActions.mockReturnValue([]);
   analytics.upcomingCardDues.mockReturnValue([]);
   analytics.dataStatus.mockReturnValue({ dataThrough: '2025-09-24' });
+  analytics.recommendations.mockReturnValue([]);
+  analytics.moneyBack.mockReturnValue({});
+  analytics.feesSummary.mockReturnValue({});
+  analytics.actionTotals.mockReturnValue({
+    purchaseReduction: { planned: 300_000, observed: null, overlappingActionIds: [] },
+    goalContributions: { planned: 0, observed: null },
+    refundsReceived: 120_000,
+    feesReversed: 5_900,
+    definition: 'Purchase reduction compares complete months with the baseline.',
+  });
   periodMock.period = { preset: 'last_month', start: '2025-09-01', end: '2025-09-30', label: 'September 2025' };
 });
 
 describe('Plan tabs', () => {
-  it('persists the selected tab in the URL', async () => {
+  it('opens on Suggestions & actions and persists the selected tab in the URL', async () => {
     const user = userEvent.setup();
     renderPlan('/plan');
-    expect(screen.getByRole('tab', { name: 'Budgets' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab')[0]).toHaveTextContent('Suggestions & actions');
+    expect(screen.getByRole('tab', { name: 'Suggestions & actions' })).toHaveAttribute('aria-selected', 'true');
     await user.click(screen.getByRole('tab', { name: 'Goals' }));
     expect(screen.getByTestId('where')).toHaveTextContent('/plan?tab=goals');
     expect(screen.getByRole('tab', { name: 'Goals' })).toHaveAttribute('aria-selected', 'true');
@@ -473,6 +499,88 @@ describe('Commitment timeline', () => {
     expect(screen.getByText('Demo Card ••1234 bill')).toBeInTheDocument();
     expect(screen.getByText('In 3 days')).toBeInTheDocument();
     expect(screen.queryByText(/Paid/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Suggestions & actions', () => {
+  const rec = {
+    id: 'rec1',
+    key: 'set_limit:food',
+    title: 'Keep food delivery near your average',
+    happened: ['You spent ', { paise: 560_000 }, ' on delivery.'],
+    evidence: { txnIds: ['a'], basis: 'Last 3 months' },
+    change: [],
+    estimatedEffect: 80_000,
+    assumptions: ['replacement meals also cost money'],
+    check: 'Compare the next complete month with your target',
+    category: 'food_dining',
+    suggestedTarget: 480_000,
+    factors: { effect: 1, evidence: 1, urgency: 1, effort: 1 },
+    kind: 'set_limit',
+  };
+  const action: SavingAction = {
+    id: 'a1',
+    type: 'category_limit',
+    title: 'Keep Travel low',
+    category: 'travel',
+    baselineMonthly: 500_000,
+    targetMonthly: 300_000,
+    startMonth: '2099-01',
+    status: 'active',
+    createdAt: '',
+    updatedAt: '',
+  };
+
+  it('shows four separate measures and never a single "You saved"', () => {
+    hooks.useSavingActions.mockReturnValue([action]);
+    renderPlan('/plan?tab=actions');
+    for (const l of ['Purchase spending reduced', 'Refunds received', 'Fees reversed', 'Contributed to goals']) {
+      expect(screen.getByText(l)).toBeInTheDocument();
+    }
+    expect(screen.getByText(/Purchase reduction compares complete months/)).toBeInTheDocument();
+    expect(screen.queryByText(/You saved/i)).not.toBeInTheDocument();
+  });
+
+  it('notes overlapping actions so effects are not added together', () => {
+    analytics.actionTotals.mockReturnValue({
+      purchaseReduction: { planned: 300_000, observed: null, overlappingActionIds: [['a1', 'a2']] },
+      goalContributions: { planned: 0, observed: null },
+      refundsReceived: 0,
+      feesReversed: 0,
+      definition: 'x',
+    });
+    hooks.useSavingActions.mockReturnValue([action]);
+    renderPlan('/plan?tab=actions');
+    expect(screen.getByText(/same spending, so their effects are not added together/)).toBeInTheDocument();
+  });
+
+  it('lists suggestions and creates an action with scope, assumptions and outcome kind', async () => {
+    analytics.recommendations.mockReturnValue([rec]);
+    actions.createSavingAction.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=actions');
+    await user.click(screen.getByRole('button', { name: /Choose a target/ }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Choose this target' }));
+    expect(actions.createSavingAction).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: expect.objectContaining({ categories: ['food_dining'] }), assumptions: ['replacement meals also cost money'], outcomeKind: 'purchase_reduction', insightId: 'rec1' }),
+    );
+  });
+
+  it('shows where each action is in its lifecycle', () => {
+    hooks.useSavingActions.mockReturnValue([action]);
+    renderPlan('/plan?tab=actions');
+    const steps = screen.getByRole('list', { name: 'Where this action is' });
+    expect(within(steps).getByText('2. Target chosen')).toHaveAttribute('aria-current', 'step');
+    expect(within(steps).getByText('5. Keep or adjust')).toBeInTheDocument();
+  });
+
+  it('saves "What matters to you" through setAdviserPreference', async () => {
+    moneyback.setAdviserPreference.mockResolvedValue(undefined);
+    analytics.categoryBaselines.mockReturnValue([{ category: 'groceries', monthlyAverage: 800_000, monthsUsed: 3 }]);
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=actions');
+    await user.selectOptions(screen.getByLabelText('Groceries'), 'protected');
+    expect(moneyback.setAdviserPreference).toHaveBeenCalledWith('groceries', 'protected');
   });
 });
 

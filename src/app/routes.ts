@@ -10,6 +10,8 @@ export const ROUTES = {
   explore: '/explore',
   accounts: '/accounts',
   review: '/review',
+  moneyBack: '/money-back',
+  fees: '/fees',
 } as const;
 
 /** Month-end review for a calendar month: '/review?month=YYYY-MM'. */

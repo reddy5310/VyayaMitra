@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, ClipboardCheck, GraduationCap } from 'lucide-react';
 import { useBudgets, useRecurringDecisions, useSavingActions } from '@/db/hooks';
+import { useAdviserPreferences, useCardPolicies, useChargeLinks, useRefundAllocations, useRefundCases } from '@/db/moneyback';
 import { useInsightFeedback, useMonthReviews } from '@/db/review';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
@@ -14,6 +15,9 @@ import {
   cumulativeSpending,
   dataStatus,
   detectRecurring,
+  feesSummary,
+  moneyBack,
+  recommendations,
   generateInsights,
   spendingPlan,
   summarize,
@@ -21,9 +25,11 @@ import {
   type Insight,
 } from '@/engine/analytics';
 import { daysInMonth, formatMonth, monthKey, todayIso } from '@/lib/dates';
-import { Card, CardHeader, Notice, Skeleton, useToast } from '@/ui';
+import { Card, CardHeader, Money, Notice, Skeleton, useToast } from '@/ui';
 import { buildCommitments } from './commitments';
 import { CommitmentTimeline } from './CommitmentTimeline';
+import { FeesSummaryCard, MoneyBackSummary } from './MoneySummaries';
+import { SuggestedActions } from './SuggestedActions';
 import { FirstRun } from './FirstRun';
 import { InsightsSection } from './InsightsSection';
 import { LinkButton } from './LinkButton';
@@ -49,6 +55,11 @@ export default function OverviewPage() {
   const actions = useSavingActions();
   const insightFeedback = useInsightFeedback();
   const reviews = useMonthReviews();
+  const cases = useRefundCases();
+  const allocations = useRefundAllocations();
+  const chargeLinks = useChargeLinks();
+  const policies = useCardPolicies();
+  const preferences = useAdviserPreferences();
   const { period } = usePeriod();
   const { toast } = useToast();
   const today = useMemo(() => todayIso(), []);
@@ -110,6 +121,39 @@ export default function OverviewPage() {
         : [],
     [insightsReady, transactions, accounts, statements, budgets, decisions, actions, insightFeedback, period.start, period.end, today],
   );
+  const advisorReady = hasData && actions !== undefined && cases !== undefined && allocations !== undefined && chargeLinks !== undefined && policies !== undefined && preferences !== undefined;
+  const recs = useMemo(
+    () =>
+      advisorReady
+        ? recommendations(transactions, {
+            accounts,
+            statements,
+            budgets: budgets ?? [],
+            actions: actions ?? [],
+            preferences: preferences ?? [],
+            feedback: insightFeedback ?? [],
+            cases: cases ?? [],
+            allocations: allocations ?? [],
+            chargeLinks: chargeLinks ?? [],
+            policies: policies ?? [],
+            today,
+            limit: 6,
+          })
+        : [],
+    [advisorReady, transactions, accounts, statements, budgets, actions, preferences, insightFeedback, cases, allocations, chargeLinks, policies, today],
+  );
+  const moneyBackData = useMemo(
+    () => (advisorReady ? moneyBack(transactions, { cases: cases ?? [], allocations: allocations ?? [], start: period.start, end: period.end, today }) : null),
+    [advisorReady, transactions, cases, allocations, period.start, period.end, today],
+  );
+  const feesData = useMemo(
+    () => (advisorReady ? feesSummary(transactions, { links: chargeLinks ?? [], policies: policies ?? [], accounts, start: period.start, end: period.end }) : null),
+    [advisorReady, transactions, chargeLinks, policies, accounts, period.start, period.end],
+  );
+  const unresolved = summary?.unresolved;
+  const unresolvedOut = unresolved?.out ?? 0;
+  const unresolvedIn = unresolved?.in ?? 0;
+
   const baselines = useMemo(
     () => (hasData ? categoryBaselines(transactions, { accounts, statements, today, months: 3 }) : []),
     [hasData, transactions, accounts, statements, today],
@@ -189,46 +233,68 @@ export default function OverviewPage() {
                 </div>
               </Card>
             ) : (
-              <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
-                <div className="space-y-4 lg:col-span-2">
+              <>
+                <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
                   <MainSummary summary={summary} status={status} plan={plan} singleMonth={singleMonth} comparison={comparison} expectedByToday={expectedByToday} />
-                  <SpendingPlanChart
-                    series={series}
-                    scope={`${period.label} · ${accountsLabel}`}
-                    incomplete={!summary.coverage.complete}
-                    hasPlan={planMonthly !== undefined}
-                  />
+                  <div className="space-y-4">
+                    {unresolvedOut + unresolvedIn > 0 && (
+                      <Notice tone="warning" title="Unresolved money movements">
+                        <p>
+                          {unresolvedOut > 0 && (
+                            <>
+                              <Money value={unresolvedOut} whole /> out
+                            </>
+                          )}
+                          {unresolvedOut > 0 && unresolvedIn > 0 && ' · '}
+                          {unresolvedIn > 0 && (
+                            <>
+                              <Money value={unresolvedIn} whole /> in
+                            </>
+                          )}{' '}
+                          &mdash;{' '}
+                          <Link to={activityLink({ review: true })} className="font-medium underline">
+                            classify
+                          </Link>
+                        </p>
+                      </Notice>
+                    )}
+                    {recs.length > 0 ? (
+                      <SuggestedActions recs={recs} actions={actions ?? []} today={today} />
+                    ) : (
+                      firstInsight.length > 0 && !reviewDue && (
+                        <InsightsSection
+                          insights={firstInsight}
+                          actions={actions ?? []}
+                          baselines={baselines}
+                          customCategories={customCategories}
+                          today={today}
+                          feedback={insightFeedback ?? []}
+                          title="Your next step"
+                          subtitle="The most useful thing to look at right now"
+                        />
+                      )
+                    )}
+                  </div>
                 </div>
 
-                <div className="space-y-4">
-                  {reviewDue && reviewMonth ? (
+                {reviewDue && reviewMonth ? (
+                  <Card>
+                    <CardHeader title="Your next review" subtitle={`${formatMonth(reviewMonth)} is complete`} />
+                    <p className="text-sm text-fg-muted">
+                      {monthReview?.status === 'in_progress'
+                        ? 'You started this review. Pick up where you left off.'
+                        : 'A five-step review turns the month into a plan for the next one: check the data, see what changed, choose one adjustment.'}
+                    </p>
+                    <div className="mt-3">
+                      <LinkButton to={reviewLink(reviewMonth)} variant="primary">
+                        {monthReview?.status === 'in_progress' ? 'Continue review' : 'Start review'}
+                      </LinkButton>
+                    </div>
+                  </Card>
+                ) : (
+                  needsReview > 0 && (
                     <Card>
-                      <CardHeader title="Your next review" subtitle={`${formatMonth(reviewMonth)} is complete`} />
-                      <p className="text-sm text-fg-muted">
-                        {monthReview?.status === 'in_progress'
-                          ? 'You started this review. Pick up where you left off.'
-                          : 'A five-step review turns the month into a plan for the next one: check the data, see what changed, choose one adjustment.'}
-                      </p>
-                      <div className="mt-3">
-                        <LinkButton to={reviewLink(reviewMonth)} variant="primary">
-                          {monthReview?.status === 'in_progress' ? 'Continue review' : 'Start review'}
-                        </LinkButton>
-                      </div>
-                    </Card>
-                  ) : firstInsight.length > 0 ? (
-                    <InsightsSection
-                      insights={firstInsight}
-                      actions={actions ?? []}
-                      baselines={baselines}
-                      customCategories={customCategories}
-                      today={today}
-                      feedback={insightFeedback ?? []}
-                      title="Your next step"
-                      subtitle="The most useful thing to look at right now"
-                    />
-                  ) : needsReview > 0 ? (
-                    <Card>
-                      <CardHeader title="Your next step" subtitle="Check what we were unsure about" />
+                      <CardHeader title="Check what we were unsure about" />
                       <p className="text-sm text-fg-muted">
                         {needsReview} {needsReview === 1 ? 'item needs' : 'items need'} a quick look. Fixing them makes every total more accurate.
                       </p>
@@ -250,16 +316,38 @@ export default function OverviewPage() {
                         </Link>
                       )}
                     </Card>
-                  ) : null}
+                  )
+                )}
 
-                  {commitments.length > 0 && (
-                    <Card>
-                      <CardHeader title="Coming up" subtitle="Next 60 days: card bills and recurring payments" action={<Link to={`${ROUTES.plan}?tab=recurring`} className="text-sm font-medium text-primary hover:underline">See all</Link>} />
-                      <CommitmentTimeline items={commitments.slice(0, 5)} />
-                    </Card>
-                  )}
-                </div>
-              </div>
+                {(moneyBackData || feesData) && (
+                  <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+                    {moneyBackData && <MoneyBackSummary data={moneyBackData} />}
+                    {feesData && <FeesSummaryCard data={feesData} />}
+                  </div>
+                )}
+
+                <SpendingPlanChart
+                  series={series}
+                  scope={`${period.label} · ${accountsLabel}`}
+                  incomplete={!summary.coverage.complete}
+                  hasPlan={planMonthly !== undefined}
+                />
+
+                {commitments.length > 0 && (
+                  <Card>
+                    <CardHeader
+                      title="Coming up"
+                      subtitle="Next 60 days: card bills and recurring payments"
+                      action={
+                        <Link to={`${ROUTES.plan}?tab=recurring`} className="text-sm font-medium text-primary hover:underline">
+                          See all
+                        </Link>
+                      }
+                    />
+                    <CommitmentTimeline items={commitments.slice(0, 5)} />
+                  </Card>
+                )}
+              </>
             )}
 
             <div className="grid gap-4 lg:grid-cols-2 lg:items-start">

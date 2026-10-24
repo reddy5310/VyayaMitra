@@ -4,7 +4,7 @@
  * Components never hold their own copy of ledger data, so stale responses cannot overwrite newer ones.
  */
 import { useLiveQuery } from 'dexie-react-hooks';
-import { useMemo } from 'react';
+import { useMemo, useSyncExternalStore } from 'react';
 import type {
   Account,
   AppSettings,
@@ -19,15 +19,21 @@ import type {
   UserRule,
 } from '@/domain/types';
 import { META_SETTINGS, db } from './db';
+import { createKeyedStores, createLiveStore } from './store';
 import { DEFAULT_SETTINGS } from './settings';
 
 export { DEFAULT_SETTINGS };
 
+// One liveQuery per data set, shared by every subscriber (see store.ts).
+const accountsStore = createLiveStore(() => db.accounts.toArray());
+const statementsStore = createLiveStore(() => db.statements.toArray());
+const customCategoriesStore = createLiveStore(() => db.customCategories.toArray());
+
 export function useAccounts(): Account[] | undefined {
-  return useLiveQuery(() => db.accounts.toArray(), []);
+  return useSyncExternalStore(accountsStore.subscribe, accountsStore.getSnapshot);
 }
 export function useStatements(): Statement[] | undefined {
-  return useLiveQuery(() => db.statements.toArray(), []);
+  return useSyncExternalStore(statementsStore.subscribe, statementsStore.getSnapshot);
 }
 
 /** Newest first: date desc, then later lines of a statement before earlier ones, then id (fully stable). */
@@ -39,9 +45,22 @@ export function compareTransactionsNewestFirst(a: Transaction, b: Transaction): 
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** All transactions, newest first (date desc, then statement order). */
+const transactionsStore = createLiveStore(async () => (await db.transactions.toArray()).sort(compareTransactionsNewestFirst));
+
+/** All transactions, newest first (date desc, then statement order). Read and sorted once, shared by all callers. */
 export function useTransactions(): Transaction[] | undefined {
-  return useLiveQuery(async () => (await db.transactions.toArray()).sort(compareTransactionsNewestFirst), []);
+  return useSyncExternalStore(transactionsStore.subscribe, transactionsStore.getSnapshot);
+}
+
+const rangeStores = createKeyedStores<Transaction[]>((key) => {
+  const [start, end] = key.split('|');
+  return async () => (await db.transactions.where('date').between(start, end, true, true).toArray()).sort(compareTransactionsNewestFirst);
+});
+
+/** Transactions dated from `start` to `end` inclusive (uses the date index), newest first. For screens that only show a period. */
+export function useTransactionsInRange(start: string, end: string): Transaction[] | undefined {
+  const store = useMemo(() => rangeStores(`${start}|${end}`), [start, end]);
+  return useSyncExternalStore(store.subscribe, store.getSnapshot);
 }
 /** `null` = not found; `undefined` = loading. */
 export function useTransaction(id: string | undefined): Transaction | null | undefined {
@@ -51,7 +70,7 @@ export function useRules(): UserRule[] | undefined {
   return useLiveQuery(() => db.rules.toArray(), []);
 }
 export function useCustomCategories(): CustomCategory[] | undefined {
-  return useLiveQuery(() => db.customCategories.toArray(), []);
+  return useSyncExternalStore(customCategoriesStore.subscribe, customCategoriesStore.getSnapshot);
 }
 export function useBudgets(): Budget[] | undefined {
   return useLiveQuery(() => db.budgets.toArray(), []);

@@ -8,6 +8,8 @@ import { addMonths, monthKey, todayIso } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
 import { Badge, Button, Card, CardHeader, ConfirmDialog, Input, Money, Notice, Select, useToast } from '@/ui';
 import { paiseToInput, parseRupeeInput } from './amount';
+import { MaskedText } from '@/features/overview/InsightText';
+import { useMask } from '@/features/overview/mask';
 import { describeImpact, runScenario } from './scenario';
 
 interface Props {
@@ -25,6 +27,7 @@ interface Props {
  */
 export function ScenarioEditor({ budgets, baselines, customCategories, prefill, onClose }: Props) {
   const { toast } = useToast();
+  const mask = useMask();
   const goals = useGoals();
   const contributions = useGoalContributions();
   const today = useMemo(() => todayIso(), []);
@@ -116,6 +119,9 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
           targetMonthly: target,
           startMonth: addMonths(monthKey(today), 1),
           status: 'active',
+          scope: { categories: [c.category] },
+          assumptions: ['Based on your recent monthly average; replacement spending is not counted.'],
+          outcomeKind: 'purchase_reduction',
         });
       }
     }
@@ -137,8 +143,10 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
         targetMonthly: result.plannedReduction,
         startMonth: addMonths(monthKey(today), 1),
         status: 'active',
+        assumptions: ['Assumes the planned reduction is actually moved into the goal.'],
+        outcomeKind: 'goal_contribution',
       });
-      toast(`Planned: ${formatINR(result.plannedReduction, { whole: true })} a month toward ${pickedGoal.goal.name}.`, { tone: 'success' });
+      toast(mask(`Planned: ${formatINR(result.plannedReduction, { whole: true })} a month toward ${pickedGoal.goal.name}.`), { tone: 'success' });
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not create the action.', { tone: 'error' });
     } finally {
@@ -269,7 +277,9 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
             <Notice tone="info" title="What it means for your goals">
               <ul className="list-disc pl-4">
                 {impacts.map((t) => (
-                  <li key={t}>{t}</li>
+                  <li key={t}>
+                    <MaskedText text={t} />
+                  </li>
                 ))}
               </ul>
             </Notice>
@@ -278,7 +288,9 @@ export function ScenarioEditor({ budgets, baselines, customCategories, prefill, 
             <Notice tone="neutral" title="Assumptions">
               <ul className="list-disc pl-4">
                 {notes.map((t) => (
-                  <li key={t}>{t}</li>
+                  <li key={t}>
+                    <MaskedText text={t} />
+                  </li>
                 ))}
               </ul>
             </Notice>

@@ -25,6 +25,7 @@ import { ruleMatches } from '@/engine/understand';
 import { formatINR } from '@/lib/money';
 import { newId, nowTimestamp } from '@/lib/ids';
 import { META_SETTINGS, db, writeAll } from './db';
+import { refreshMoneyLinks } from './moneyback';
 import {
   REASON_CONFIRMED,
   REASON_RENAMED,
@@ -201,6 +202,7 @@ export async function deleteAccount(id: string): Promise<void> {
     await db.accounts.delete(id);
     await db.rules.filter((r) => r.accountId === id).delete();
     await detachDeleted(txns);
+    await refreshMoneyLinks();
     await retrainLearnedModel();
   });
 }
@@ -342,6 +344,7 @@ export async function setTransactionsKind(txnIds: string[], kind: TxnKind): Prom
     await db.transactions.bulkPut(next);
     await unlinkGroup(new Set(next.map((t) => t.id)));
     await relinkAll();
+    await refreshMoneyLinks();
     await recordFeedback(
       txns.map((t, i) => ({
         txn: t,
@@ -381,6 +384,7 @@ export async function setTransactionKind(txnId: string, kind: TxnKind, scope: Co
     await db.transactions.bulkPut(targets);
     await unlinkGroup(new Set(targets.map((t) => t.id)));
     await relinkAll();
+    await refreshMoneyLinks();
     const done = targets.find((t) => t.id === txn.id) ?? targets[0];
     await recordFeedback([
       {

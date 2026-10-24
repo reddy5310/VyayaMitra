@@ -10,6 +10,8 @@ import { ROUTES, activityLink } from '@/app/routes';
 import { addMonths, formatMonth, monthKey } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
 import { Badge, Button, Card, CardHeader, Money, Notice, Sheet, cn, useToast } from '@/ui';
+import { InsightTextView, MaskedText } from './InsightText';
+import { rich, useMask } from './mask';
 import { LinkButton } from './LinkButton';
 
 const SEVERITY: Record<InsightSeverity, { icon: typeof Info; chip: string; iconClass: string; label: string }> = {
@@ -149,6 +151,8 @@ function InsightItem({
   const Icon = sev.icon;
   const target = actionTarget(insight);
   const a = insight.action;
+  const r = rich(insight);
+  const mask = useMask();
   const txnCount = insight.evidence.txnIds.length;
   return (
     <li className="rounded-xl border border-border bg-surface p-3">
@@ -159,17 +163,23 @@ function InsightItem({
         <div className="min-w-0 flex-1">
           <h3 className="text-sm font-semibold text-fg">
             <span className="sr-only">{sev.label}: </span>
-            {insight.title}
+            <InsightTextView parts={r.titleParts} fallback={insight.title} />
           </h3>
-          <p className="mt-1 text-sm text-fg-muted">{insight.body}</p>
-          {insight.basis && <p className="mt-1 text-xs italic text-fg-subtle">Basis: {insight.basis}</p>}
+          <p className="mt-1 text-sm text-fg-muted">
+            <InsightTextView parts={r.bodyParts} fallback={insight.body} />
+          </p>
+          {insight.basis && (
+            <p className="mt-1 text-xs italic text-fg-subtle">
+              Basis: <MaskedText text={insight.basis} />
+            </p>
+          )}
 
           {insight.evidence.figures.length > 0 && (
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-              {insight.evidence.figures.map((f) => (
+              {r.evidence.figures.map((f) => (
                 <div key={f.label} className="min-w-0">
                   <dt className="text-fg-subtle">{f.label}</dt>
-                  <dd className="font-medium text-fg">{f.value}</dd>
+                  <dd className="font-medium text-fg">{f.amount !== undefined ? <Money value={f.amount} whole /> : <MaskedText text={f.value} />}</dd>
                 </div>
               ))}
             </dl>
@@ -206,7 +216,7 @@ function InsightItem({
                 </LinkButton>
               ) : null)}
           </div>
-          <div className="flex flex-wrap gap-1" role="group" aria-label={`Feedback on ${insight.title}`}>
+          <div className="flex flex-wrap gap-1" role="group" aria-label={`Feedback on ${mask(insight.title)}`}>
             {(
               [
                 ['dismissed', 'Dismiss'],
@@ -221,7 +231,7 @@ function InsightItem({
                 className="min-h-touch rounded-xl px-2 text-sm font-medium text-fg-muted hover:bg-surface-2 hover:text-fg"
               >
                 {label}
-                <span className="sr-only">: {insight.title}</span>
+                <span className="sr-only">: {mask(insight.title)}</span>
               </button>
             ))}
           </div>
@@ -271,6 +281,8 @@ function SetLimitSheet({
         startMonth,
         status: 'active',
         insightId: insight.id,
+        scope: { categories: [category] },
+        outcomeKind: 'purchase_reduction',
       });
       if (alsoBudget) await upsertBudget(category, target);
       toast(alsoBudget ? `Action started and ${name} budget set.` : 'Action started.', {

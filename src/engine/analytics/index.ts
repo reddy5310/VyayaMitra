@@ -22,7 +22,7 @@ import type {
   Transaction,
   TxnKind,
 } from '@/domain/types';
-import type { ExpenseTag, InsightFeedback } from '@/domain/types';
+import type { ChargeType, ExpenseTag, InsightFeedback, RefundCase } from '@/domain/types';
 import type { MetricBucket } from '@/domain/kinds';
 
 // ─── The one filter contract ─────────────────────────────────────────────────
@@ -118,12 +118,12 @@ export interface LedgerSummary {
   end: IsoDate;
   income: Paise;
   /**
-   * Consumption net of refunds: cash, fees, EMIs, merchants, plus people flows under the NETTING RULE.
-   * People flows still in their default categories (p2p_out 'sent_to_people', p2p_in
-   * 'received_from_people') are unclassified: only max(0, unclassifiedOut - unclassifiedIn) counts as
-   * spending (`peopleNetOut`), and a net inflow is never income. A p2p_out the user or a rule moved to a
-   * real spending category (family_support, rent_housing, food_dining...) counts in full; a p2p_in
-   * made income by kind counts as income.
+   * Spending net of refunds: merchants, bills, cash, fees, EMIs and money sent to people that has been
+   * classified (p2p_out in a real category such as rent_housing or family_support counts in full).
+   * UNRESOLVED people flows (p2p_out still in 'sent_to_people', p2p_in still in 'received_from_people')
+   * are NOT spending and not income: they are reported in `unresolved` until the user classifies them,
+   * and are never netted against each other. A confirmed reimbursement (p2p_in or refund categorised
+   * 'refunds') offsets only its expense. savingsRate is null when unresolved.out > 5% of income.
    */
   spending: Paise;
   refunds: Paise;
@@ -140,7 +140,7 @@ export interface LedgerSummary {
   savingsRateNote?: string;
   /**
    * Consumption spending: spending bucket total excluding ALL people flows (p2p_out), i.e. merchants,
-   * bills, cash, fees and EMIs. Show "Spending" next to "Sent to people" using `peopleNetOut`.
+   * bills, cash, fees and EMIs. Show "Spending" next to "Sent to people" and `unresolved`.
    */
   consumption?: Paise;
   peopleIn: Paise;
@@ -150,8 +150,10 @@ export interface LedgerSummary {
   peopleUnclassifiedOut?: Paise;
   /** Unclassified in: p2p_in still in the default 'received_from_people' category. */
   peopleUnclassifiedIn?: Paise;
-  /** max(0, unclassifiedOut - unclassifiedIn): the part of people flows that counts toward `spending`. */
+  /** @deprecated No netting any more; always omitted. Use `unresolved`. */
   peopleNetOut?: Paise;
+  /** Unclassified people flows: excluded from spending and income until classified. */
+  unresolved?: { out: Paise; in: Paise; txnIds: string[] };
   neutral: { selfTransfers: Paise; cardPayments: Paise; reversals: Paise; loanReceived: Paise };
   /** Raw bank-account cash movement excluding transfers between own accounts. */
   cashFlow: { inflow: Paise; outflow: Paise; net: Paise };
@@ -280,8 +282,11 @@ export interface Insight {
   title: string;
   /** What changed, in one or two plain sentences with real numbers. */
   body: string;
+  /** `title` / `body` as structured parts (strings and `{ paise }`) so every rupee renders through <Money>. */
+  titleParts?: InsightText;
+  bodyParts?: InsightText;
   /** What supports it. */
-  evidence: { txnIds: string[]; figures: { label: string; value: string }[] };
+  evidence: { txnIds: string[]; figures: { label: string; value: string; amount?: Paise }[] };
   /** The comparison basis, e.g. "Comparing 1–14 Sep with 1–14 Aug (equivalent days)". */
   basis?: string;
   /** What the user can do about it. */
@@ -522,3 +527,98 @@ export interface MonthReviewData {
 }
 
 export { monthReviewData } from './monthReview';
+
+// ─── Wave 8: money back, fees, adviser (contracts) ───────────────────────────
+
+export interface MoneyBackCase {
+  case: RefundCase;
+  purchases: { txnId: string; date: IsoDate; amount: Paise; merchant: string }[];
+  purchaseTotal: Paise;
+  expected?: Paise;
+  received: Paise;
+  /** expected − received, only when expected is known. */
+  outstanding?: Paise;
+  status: 'expected' | 'partially_received' | 'received' | 'over_received' | 'closed' | 'amount_to_confirm';
+  /** Days since the latest purchase (or promised date passed) while still open and outstanding. */
+  ageDays: number;
+  overdue: boolean;
+  timeline: { date: IsoDate; kind: 'purchase' | 'credit' | 'promised' | 'note' | 'closed'; text: string; amount?: Paise; txnId?: string }[];
+}
+
+export interface MoneyBack {
+  received: { creditTxnId: string; date: IsoDate; amount: Paise; allocated: Paise; unallocated: Paise; merchant: string; caseIds: string[] }[];
+  cases: MoneyBackCase[];
+  /** Credits that look like refunds but are not (fully) allocated. */
+  needsMatching: { creditTxnId: string; date: IsoDate; amount: Paise; merchant: string; candidatePurchaseIds: string[] }[];
+  totals: { receivedInPeriod: Paise; expectedOutstanding: Paise; openCases: number; amountToConfirm: number };
+}
+
+/** `view`: 'statement' = credits counted when posted; 'purchase' = credits reduce the purchase they belong to. */
+
+export interface ChargeEvent {
+  groupId: string;
+  date: IsoDate;
+  accountId: string;
+  chargeType: ChargeType;
+  charge: Paise;
+  tax: Paise;
+  reversed: Paise;
+  /** charge + tax − reversed (what it actually cost). */
+  net: Paise;
+  relatedPurchaseTxnId?: string;
+  txnIds: string[];
+  status: 'reversed' | 'partly_reversed' | 'not_reversed';
+  /** "might qualify for reversal under your recorded card terms" — only from a user-entered CardPolicy. */
+  eligibility: { state: 'likely' | 'unlikely' | 'unknown'; note: string; policyId?: string };
+  explanation: string;
+}
+
+export interface FeesSummary {
+  events: ChargeEvent[];
+  byMonth: { month: MonthKey; byType: Partial<Record<ChargeType, Paise>>; net: Paise }[];
+  totals: { charged: Paise; tax: Paise; reversed: Paise; net: Paise };
+  /** Charges that recur (same type in ≥ 2 of the last 3 months). */
+  recurring: { chargeType: ChargeType; months: number; total: Paise }[];
+}
+
+
+export interface Recommendation {
+  id: string;
+  key: string;
+  /** "Try two fewer delivery orders next month" */
+  title: string;
+  /** What happened, with structured amounts (render through <Money>). */
+  happened: InsightText;
+  evidence: { txnIds: string[]; basis: string };
+  change: InsightText;
+  /** Estimated monthly effect — a scenario, never "saved". */
+  estimatedEffect?: Paise;
+  assumptions: string[];
+  /** How it will be checked: "Compare the next complete month with your target". */
+  check: string;
+  category?: string;
+  merchantKey?: string;
+  suggestedTarget?: Paise;
+  /** Explainable ranking factors 0..1. */
+  factors: { effect: number; evidence: number; urgency: number; effort: number };
+  kind: 'reduce_frequency' | 'set_limit' | 'review_recurring' | 'chase_refund' | 'avoid_fee' | 'ask_context';
+}
+
+/** Text with structured amounts so "hide amounts" can mask them: render strings as-is, numbers via <Money>. */
+export type InsightText = (string | { paise: Paise })[];
+
+
+export interface ActionTotals {
+  /** Kept separate on purpose — never summed into one "You saved". */
+  purchaseReduction: { planned: Paise; observed: Paise | null; overlappingActionIds: string[][] };
+  goalContributions: { planned: Paise; observed: Paise | null };
+  refundsReceived: Paise;
+  feesReversed: Paise;
+  /** Plain explanation of how the figures were measured. */
+  definition: string;
+}
+
+export { moneyBack } from './moneyBack';
+export { feesSummary } from './fees';
+export { recommendations, actionTotals } from './adviser';
+export type { RecommendationContext } from './adviser';

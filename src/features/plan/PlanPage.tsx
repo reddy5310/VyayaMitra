@@ -8,10 +8,10 @@ import { GoalsTab } from './GoalsTab';
 import { RecurringTab } from './RecurringTab';
 
 const TABS = [
+  { id: 'actions', label: 'Suggestions & actions', Panel: ActionsTab },
   { id: 'budgets', label: 'Budgets', Panel: BudgetsTab },
   { id: 'recurring', label: 'Recurring', Panel: RecurringTab },
   { id: 'goals', label: 'Goals', Panel: GoalsTab },
-  { id: 'actions', label: 'Actions', Panel: ActionsTab },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -24,7 +24,7 @@ export default function PlanPage() {
   usePageChrome({ title: 'Plan', subtitle: 'Budgets, recurring payments, goals and the saving actions you have started.' });
   const [params, setParams] = useSearchParams();
   const raw = params.get('tab');
-  const current: TabId = isTab(raw) ? raw : 'budgets';
+  const current: TabId = isTab(raw) ? raw : 'actions';
   const refs = useRef<Record<string, HTMLButtonElement | null>>({});
 
   function select(id: TabId) {
@@ -65,7 +65,7 @@ export default function PlanPage() {
             onClick={() => select(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
-              'min-h-touch flex-1 rounded-lg px-2 text-sm font-medium transition-colors',
+              'min-h-touch min-w-0 flex-1 rounded-lg px-1.5 text-center text-sm font-medium leading-tight transition-colors',
               current === t.id ? 'bg-surface text-fg shadow-card' : 'text-fg-muted hover:text-fg',
             )}
           >

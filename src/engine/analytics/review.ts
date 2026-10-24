@@ -1,7 +1,6 @@
 /** Wave 5: guided-review analytics (data status, plan, cumulative, comparison, calendar, pareto, flow, grid, card cycles). */
 import type { Account, Budget, IsoDate, MonthKey, Paise, Statement, Transaction } from '@/domain/types';
 import { BUDGETABLE_GROUPS, CATEGORY_GROUP_LABELS, categoryById, categoryName } from '@/domain/categories';
-import { metricBucket } from '@/domain/kinds';
 import { addDays, addMonths, daysBetween, daysInMonth, formatMonth, monthEnd, monthKey, monthStart } from '@/lib/dates';
 import { computeCoverage } from './coverage';
 import type {
@@ -19,7 +18,7 @@ import type {
 } from './index';
 import { applyQuery } from './query';
 import { bucketTotals, merchantBreakdown } from './summary';
-import { categoryResolver, contribution, formatRange, isSpending, isUnclassifiedIn, isUnclassifiedOut, isWholeMonth, peopleNetOut, sum, UNCLASSIFIED_OUT } from './util';
+import { categoryResolver, contribution, effectiveBucket, formatRange, isSpending, isUnclassifiedOut, isWholeMonth, sum } from './util';
 
 const BANK_TYPES: ReadonlySet<Account['type']> = new Set(['savings', 'current', 'wallet']);
 
@@ -110,8 +109,7 @@ export function spendingPlan(budgets: readonly Budget[]): { monthlyLimit: Paise;
 // ─── cumulativeSpending ──────────────────────────────────────────────────────
 
 /**
- * Running total of spending (people flows netted cumulatively, so the last point equals the summary's
- * spending). `actual` is null on uncovered days and on days after `today`. The plan line paces each calendar
+ * Running total of spending (the last point equals the summary's spending; unresolved people flows are not included). `actual` is null on uncovered days and on days after `today`. The plan line paces each calendar
  * month evenly. A projection (average daily pace x remaining days) is added only for the current month with
  * at least 10 covered days and 5 spending transactions, and only after the last covered day.
  */
@@ -122,14 +120,8 @@ export function cumulativeSpending(
   const { start, end, today } = ctx;
   const inRange = applyQuery(txns, { start, end });
   const covered = coveredPredicate(ctx.accounts, ctx.statements, start, end, txns);
-  const byDay = new Map<IsoDate, { other: number; out: number; inn: number }>();
-  for (const t of inRange) {
-    const d = byDay.get(t.date) ?? { other: 0, out: 0, inn: 0 };
-    if (isUnclassifiedOut(t)) d.out += contribution(t);
-    else if (isUnclassifiedIn(t)) d.inn += t.amount;
-    else if (isSpending(t)) d.other += contribution(t);
-    byDay.set(t.date, d);
-  }
+  const byDay = new Map<IsoDate, number>();
+  for (const t of inRange) if (isSpending(t)) byDay.set(t.date, (byDay.get(t.date) ?? 0) + contribution(t));
   const P = ctx.planMonthly;
   const paced = (day: number, month: MonthKey): number => Math.round(((P as number) * day) / daysInMonth(Number(month.slice(0, 4)), Number(month.slice(5, 7))));
   const startM = monthKey(start);
@@ -141,23 +133,15 @@ export function cumulativeSpending(
     return total;
   };
 
-  let other = 0;
-  let out = 0;
-  let inn = 0;
+  let cum = 0;
   const points: CumulativePoint[] = [];
   for (const date of eachDay(start, end)) {
-    const d = byDay.get(date);
-    if (d) {
-      other += d.other;
-      out += d.out;
-      inn += d.inn;
-    }
-    const cum = other + Math.max(0, out - inn);
+    cum += byDay.get(date) ?? 0;
     const isCovered = covered(date) && date <= today;
     const p = plan(date);
     points.push({ date, actual: isCovered ? cum : null, covered: isCovered, ...(p !== undefined ? { plan: p } : {}) });
   }
-  const total = other + Math.max(0, out - inn);
+  const total = cum;
   const coveredPts = points.filter((p) => p.covered);
   const last = coveredPts.length ? coveredPts[coveredPts.length - 1] : undefined;
 
@@ -190,7 +174,7 @@ function periodLabel(start: IsoDate, end: IsoDate): string {
   return formatRange(start, end);
 }
 
-/** Net spending per category (linked refunds reduce the original; unclassified people flows netted). */
+/** Net spending per category (linked refunds reduce the original; unresolved people flows excluded). */
 function categoryNet(range: readonly Transaction[], catOf: (t: Transaction) => string): Map<string, { amount: Paise; ids: string[] }> {
   const m = new Map<string, { amount: Paise; ids: string[] }>();
   for (const t of range) {
@@ -200,13 +184,6 @@ function categoryNet(range: readonly Transaction[], catOf: (t: Transaction) => s
     cur.amount += contribution(t);
     cur.ids.push(t.id);
     m.set(c, cur);
-  }
-  const people = m.get(UNCLASSIFIED_OUT);
-  if (people) {
-    const f = peopleNetOut(range);
-    people.amount += f.netOut - f.out;
-    for (const t of range) if (isUnclassifiedIn(t)) people.ids.push(t.id);
-    if (people.amount === 0) m.delete(UNCLASSIFIED_OUT);
   }
   return m;
 }
@@ -278,7 +255,7 @@ export function compareSpending(
 
 // ─── spendingCalendar / merchantPareto ───────────────────────────────────────
 
-/** Daily net spending; unclassified people flows are left out (they are netted only over a whole period). */
+/** Daily net spending; unresolved people flows are not spending and are left out. */
 export function spendingCalendar(
   txns: readonly Transaction[],
   ctx: { accounts: readonly Account[]; statements: readonly Statement[]; start: IsoDate; end: IsoDate },
@@ -288,7 +265,7 @@ export function spendingCalendar(
   for (const t of applyQuery(txns, { start: ctx.start, end: ctx.end })) {
     if (!isSpending(t)) continue;
     const d = byDay.get(t.date) ?? { amount: 0, count: 0 };
-    if (!isUnclassifiedOut(t)) d.amount += contribution(t);
+    d.amount += contribution(t);
     d.count++;
     byDay.set(t.date, d);
   }
@@ -361,7 +338,7 @@ export function moneyFlow(
   const invested = new Map<string, number>();
   for (const t of range) {
     const isCard = acctById.get(t.accountId)?.type === 'credit_card';
-    const bucket = metricBucket(t.kind, t.direction);
+    const bucket = effectiveBucket(t);
     if (!isCard && t.direction === 'credit' && bucket === 'income') {
       link(node('income', 'Income', 'income'), acctNode(t.accountId), t.amount);
       bump(inflow, t.accountId, t.amount);
@@ -370,12 +347,11 @@ export function moneyFlow(
       bump(inflow, t.accountId, t.amount);
     } else if (bucket === 'invested' && !isCard) {
       bump(invested, t.accountId, contribution(t));
+    } else if (isUnclassifiedOut(t)) {
+      bump(unclassOutByAcct, t.accountId, contribution(t));
     } else if (isSpending(t)) {
-      if (isUnclassifiedOut(t)) bump(unclassOutByAcct, t.accountId, contribution(t));
-      else {
-        const g = categoryById(catOf(t)).group;
-        bump(groupNet, `${t.accountId}|${g}`, contribution(t));
-      }
+      const g = categoryById(catOf(t)).group;
+      bump(groupNet, `${t.accountId}|${g}`, contribution(t));
     }
   }
   for (const [key, amount] of groupNet) {
@@ -388,17 +364,11 @@ export function moneyFlow(
     link(acctNode(accountId), node('saving', 'Saved & invested', 'saving'), amount);
     bump(outflow, accountId, amount);
   }
-  // People flows: net out = max(0, unclassified out - unclassified in), shared by each account's gross out.
-  const flows = peopleNetOut(range);
-  const grossOut = sum(unclassOutByAcct.values());
-  let left = flows.netOut;
-  const entries = [...unclassOutByAcct.entries()];
-  entries.forEach(([accountId, gross], i) => {
-    const share = i === entries.length - 1 ? left : Math.round((flows.netOut * gross) / (grossOut || 1));
-    left -= share;
-    link(acctNode(accountId), node('people_out', 'Sent to people (net)', 'people_out'), share);
-    if (acctById.get(accountId)?.type !== 'credit_card') bump(outflow, accountId, share);
-  });
+  // Unresolved people flows are shown gross: they are cash out but not (yet) classified spending.
+  for (const [accountId, gross] of unclassOutByAcct) {
+    link(acctNode(accountId), node('people_out', 'Sent to people (not classified yet)', 'people_out'), gross);
+    if (acctById.get(accountId)?.type !== 'credit_card') bump(outflow, accountId, gross);
+  }
   for (const [accountId, out] of outflow) {
     const gap = out - (inflow.get(accountId) ?? 0);
     link(node('unexplained', 'Opening balance / other', 'unexplained'), acctNode(accountId), gap);

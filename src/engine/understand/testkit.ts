@@ -93,6 +93,7 @@ export function understood(
     reasons: u.reasons,
     needsReview: u.needsReview,
     reviewReasons: u.reviewReasons,
+    ...(u.chargeType ? { chargeType: u.chargeType } : {}),
     ...extra,
   });
 }

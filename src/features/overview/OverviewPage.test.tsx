@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, Transaction } from '@/domain/types';
 import type { CardDue, DataStatus, Insight, LedgerSummary } from '@/engine/analytics';
 import { addMonths, formatDate, monthKey, todayIso } from '@/lib/dates';
-import { ToastProvider } from '@/ui';
+import { PrivacyContext, ToastProvider } from '@/ui';
 
 const hooks = vi.hoisted(() => ({
   useLedger: vi.fn(),
@@ -26,6 +26,16 @@ const review = vi.hoisted(() => ({
 }));
 vi.mock('@/db/review', () => review);
 
+const moneyback = vi.hoisted(() => ({
+  useRefundCases: vi.fn(() => []),
+  useRefundAllocations: vi.fn(() => []),
+  useChargeLinks: vi.fn(() => []),
+  useCardPolicies: vi.fn(() => []),
+  useAdviserPreferences: vi.fn(() => []),
+  setAdviserPreference: vi.fn(),
+}));
+vi.mock('@/db/moneyback', () => moneyback);
+
 const sample = vi.hoisted(() => ({ sampleDataAvailable: true, startSample: vi.fn() }));
 vi.mock('./sample', () => sample);
 
@@ -44,6 +54,9 @@ const analytics = vi.hoisted(() => ({
   cumulativeSpending: vi.fn(),
   compareSpending: vi.fn(),
   detectRecurring: vi.fn(),
+  recommendations: vi.fn(),
+  moneyBack: vi.fn(),
+  feesSummary: vi.fn(),
 }));
 vi.mock('@/engine/analytics', () => analytics);
 
@@ -112,6 +125,10 @@ function setup(
     plan?: { monthlyLimit: number; categories: string[] } | null;
     comparison?: unknown;
     reviews?: unknown[];
+    recs?: unknown[];
+    money?: unknown;
+    fees?: unknown;
+    hide?: boolean;
   } = {},
 ) {
   hooks.useLedger.mockReturnValue({
@@ -135,12 +152,17 @@ function setup(
   analytics.generateInsights.mockReturnValue(o.insights ?? []);
   analytics.upcomingCardDues.mockReturnValue(o.dues ?? []);
   analytics.detectRecurring.mockReturnValue([]);
+  analytics.recommendations.mockReturnValue(o.recs ?? []);
+  analytics.moneyBack.mockReturnValue(o.money ?? { received: [], cases: [], needsMatching: [], totals: { receivedInPeriod: 0, expectedOutstanding: 0, openCases: 0, amountToConfirm: 0 } });
+  analytics.feesSummary.mockReturnValue(o.fees ?? { events: [], byMonth: [], totals: { charged: 0, tax: 0, reversed: 0, net: 0 }, recurring: [] });
   analytics.categoryBaselines.mockReturnValue([{ category: 'food_dining', monthlyAverage: 1_500_000, monthsUsed: 3 }]);
   return render(
     <ToastProvider>
-      <MemoryRouter>
-        <OverviewPage />
-      </MemoryRouter>
+      <PrivacyContext.Provider value={{ hideAmounts: o.hide ?? false }}>
+        <MemoryRouter>
+          <OverviewPage />
+        </MemoryRouter>
+      </PrivacyContext.Provider>
     </ToastProvider>,
   );
 }
@@ -333,6 +355,118 @@ describe('Overview review prompt and insight feedback', () => {
     expect(review.recordInsightFeedback).toHaveBeenLastCalledWith({ key: 'category_change:food', insightId: 'ins-food', action: 'irrelevant' });
     await user.click(screen.getByRole('button', { name: /^Dismiss\s*:/ }));
     expect(review.recordInsightFeedback).toHaveBeenLastCalledWith({ key: 'category_change:food', insightId: 'ins-food', action: 'dismissed' });
+  });
+});
+
+const rec = (over: Record<string, unknown> = {}) => ({
+  id: 'rec-food',
+  key: 'reduce_frequency:food',
+  title: 'Try two fewer delivery orders next month',
+  happened: ['You ordered delivery 14 times, spending ', { paise: 560_000 }, '.'],
+  evidence: { txnIds: ['a', 'b'], basis: 'Last 3 months' },
+  change: ['Two fewer orders would be about ', { paise: 80_000 }, ' a month.'],
+  estimatedEffect: 80_000,
+  assumptions: ['replacement meals also cost money'],
+  check: 'Compare the next complete month with your target',
+  category: 'food_dining',
+  suggestedTarget: 480_000,
+  factors: { effect: 0.5, evidence: 0.5, urgency: 0.2, effort: 0.3 },
+  kind: 'reduce_frequency',
+  ...over,
+});
+
+describe('Overview suggested actions', () => {
+  it('shows the top three recommendations, with urgent refund and fee items always included', () => {
+    const recs = [rec({ id: 'r1', title: 'One' }), rec({ id: 'r2', title: 'Two' }), rec({ id: 'r3', title: 'Three' }), rec({ id: 'r4', title: 'Four' }), rec({ id: 'r5', title: 'Chase the hotel refund', kind: 'chase_refund' })];
+    setup({ recs });
+    expect(screen.getByRole('heading', { name: 'Suggested actions' })).toBeInTheDocument();
+    expect(screen.getByText('Chase the hotel refund')).toBeInTheDocument();
+    expect(screen.getByText('One')).toBeInTheDocument();
+    expect(screen.getByText('Two')).toBeInTheDocument();
+    expect(screen.queryByText('Three')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Money back' })).toHaveAttribute('href', '/money-back');
+  });
+
+  it('labels the effect as an estimate and states assumptions', () => {
+    setup({ recs: [rec()] });
+    expect(screen.getByText('Estimate')).toBeInTheDocument();
+    expect(screen.getByText(/Assumes: replacement meals also cost money/)).toBeInTheDocument();
+    expect(screen.getByText(/Not saved yet/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View purchases/ })).toHaveAttribute('href', '/activity?ids=a%2Cb');
+  });
+
+  it('stays visible when a month-end review is due', () => {
+    setup({ recs: [rec()], reviews: [] });
+    expect(screen.getByRole('heading', { name: 'Your next review' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Suggested actions' })).toBeInTheDocument();
+  });
+
+  it('"Choose a target" stores scope, assumptions and outcome kind', async () => {
+    actions.createSavingAction.mockResolvedValue({});
+    const user = userEvent.setup();
+    setup({ recs: [rec()] });
+    await user.click(screen.getByRole('button', { name: /Choose a target/ }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByLabelText('Monthly target (₹)')).toHaveValue('4800');
+    await user.click(within(dialog).getByRole('button', { name: 'Choose this target' }));
+    expect(actions.createSavingAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'category_limit',
+        category: 'food_dining',
+        targetMonthly: 480_000,
+        baselineMonthly: 560_000,
+        insightId: 'rec-food',
+        scope: expect.objectContaining({ categories: ['food_dining'] }),
+        assumptions: ['replacement meals also cost money'],
+        outcomeKind: 'purchase_reduction',
+      }),
+    );
+  });
+
+  it('"Keep this spending" protects the category', async () => {
+    moneyback.setAdviserPreference.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    setup({ recs: [rec()] });
+    await user.click(screen.getByRole('button', { name: /Keep this spending/ }));
+    expect(moneyback.setAdviserPreference).toHaveBeenCalledWith('food_dining', 'protected');
+  });
+
+  it('masks amounts inside advice text when "Hide amounts" is on', () => {
+    setup({ recs: [rec()], hide: true });
+    expect(screen.queryByText(/5,600/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/800/)).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText('Amount hidden').length).toBeGreaterThan(0);
+  });
+
+  it('masks rupee amounts in preformatted insight text too', () => {
+    setup({ hide: true, insights: [{ id: 'x', type: 'budget', severity: 'info', title: 'You spent ₹12,500 on food', body: 'That is ₹3,200 more.', evidence: { txnIds: [], figures: [{ label: 'Total', value: '₹12,500' }] } }] });
+    expect(screen.getByText('You spent ₹ •••• on food')).toBeInTheDocument();
+    expect(screen.queryByText(/12,500/)).not.toBeInTheDocument();
+  });
+});
+
+describe('Overview money back, fees and unresolved movements', () => {
+  it('shows compact Money back and Fees summaries linking to their pages', () => {
+    setup({
+      money: { received: [], cases: [], needsMatching: [{ creditTxnId: 'c1' }], totals: { receivedInPeriod: 0, expectedOutstanding: 450_000, openCases: 2, amountToConfirm: 0 } },
+      fees: { events: [{ status: 'not_reversed' }, { status: 'reversed' }], byMonth: [], totals: { charged: 0, tax: 0, reversed: 0, net: 59_000 }, recurring: [] },
+    });
+    expect(screen.getByRole('link', { name: /Open Money back/ })).toHaveAttribute('href', '/money-back');
+    expect(screen.getByRole('link', { name: /Open Fees/ })).toHaveAttribute('href', '/fees');
+    expect(screen.getByText('Open cases').nextSibling).toHaveTextContent('2');
+    expect(screen.getByText('Not reversed').nextSibling).toHaveTextContent('1');
+  });
+
+  it('flags unresolved money movements with amounts out and in', () => {
+    setup({ summary: { ...summaryFixture(), unresolved: { out: 250_000, in: 120_000 } } as LedgerSummary });
+    const note = screen.getByText(/Unresolved money movements/).closest('div')!.parentElement!;
+    expect(note).toHaveTextContent('₹2,500 out · ₹1,200 in');
+    expect(within(note).getByRole('link', { name: 'classify' })).toHaveAttribute('href', '/activity?review=1');
+  });
+
+  it('shows no unresolved note when nothing is unresolved', () => {
+    setup();
+    expect(screen.queryByText(/Unresolved money movements/)).not.toBeInTheDocument();
   });
 });
 

@@ -241,7 +241,7 @@ describe('summarize', () => {
     expect(s.byCategory.map((c) => c.amount)).toEqual([...s.byCategory.map((c) => c.amount)].sort((a, b) => b - a));
   });
 
-  it('nets unclassified people flows into spending and never counts money from people as income', () => {
+  it('keeps unclassified people flows out of spending and never counts money from people as income', () => {
     const txns = [
       makeTxn({ accountId: 'bank', date: '2025-10-02', rupees: 2000, kind: 'p2p_out', category: 'sent_to_people' }),
       makeTxn({ accountId: 'bank', date: '2025-10-03', rupees: 500, kind: 'expense', category: 'groceries' }),
@@ -252,20 +252,20 @@ describe('summarize', () => {
       makeTxn({ accountId: 'bank', date: '2025-10-07', rupees: 1500, kind: 'investment', category: 'investments' }),
     ];
     const s = summarize(txns, ctx);
-    // unclassified people flows are netted: 2,000 out - 700 in = 1,300 counts, plus 500 groceries
-    expect(s.spending).toBe(180_000);
+    // unclassified people flows (2,000 out, 700 in) are unresolved: not spending, not income
+    expect(s.spending).toBe(50_000);
     expect(s.peopleOut).toBe(200_000);
     expect(s.peopleIn).toBe(70_000);
-    expect(s.peopleNetOut).toBe(130_000);
+    expect(s.unresolved).toMatchObject({ out: 200_000, in: 70_000 });
     expect(s.consumption).toBe(50_000);
     expect(s.income).toBe(0);
     expect(s.invested).toBe(150_000);
     expect(s.neutral).toEqual({ selfTransfers: 30_000, cardPayments: 0, reversals: 0, loanReceived: 90_000 });
     expect(s.cashFlow.inflow).toBe(70_000 + 90_000);
     expect(s.cashFlow.outflow).toBe(200_000 + 50_000 + 150_000);
-    expect(s.byGroup[0].group).toBe('people');
-    expect(s.byCategory[0]).toMatchObject({ category: 'sent_to_people', amount: 130_000 });
-    expect(s.byCategory[0].share).toBeCloseTo(130 / 180);
+    expect(s.byGroup[0].group).toBe('essentials');
+    expect(s.byCategory[0]).toMatchObject({ category: 'groceries', amount: 50_000 });
+    expect(s.byCategory[0].share).toBe(1);
   });
 
   it('caps the coverage window at today when given', () => {

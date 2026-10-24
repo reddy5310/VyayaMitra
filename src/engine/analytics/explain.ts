@@ -5,7 +5,7 @@ import { formatINR } from '@/lib/money';
 import type { SpendingComparison } from './index';
 import { applyQuery } from './query';
 import { compareSpending } from './review';
-import { categoryResolver, contribution, isSpending, median, isUnclassifiedIn, isUnclassifiedOut, isWholeMonth } from './util';
+import { categoryResolver, contribution, isSpending, median, isWholeMonth } from './util';
 
 export interface MerchantChange {
   merchantKey: string;
@@ -58,7 +58,7 @@ interface Agg {
 function aggregate(range: readonly Transaction[], catOf: (t: Transaction) => string, category?: string): Map<string, Agg> {
   const m = new Map<string, Agg>();
   for (const t of range) {
-    if (!isSpending(t) || isUnclassifiedOut(t) || isUnclassifiedIn(t)) continue;
+    if (!isSpending(t)) continue;
     const cat = catOf(t);
     if (category && cat !== category) continue;
     const key = t.merchantKey || t.counterparty.vpa || t.merchant;
@@ -76,8 +76,8 @@ const avg = (a: Agg | undefined): Paise => (a && a.n > 0 ? Math.round(a.total / 
 /**
  * Why spending changed, merchant by merchant. Per merchant, delta = current total - previous total
  * (refunds net), split into frequencyEffect = (n1 - n0) x avg0 and sizeEffect = delta - frequencyEffect.
- * Merchants with n0 = 0 are 'new', with n1 = 0 'stopped' (all of the delta is frequency). Unclassified
- * people transfers are left out here (they are netted only over a whole period, see compareSpending).
+ * Merchants with n0 = 0 are 'new', with n1 = 0 'stopped' (all of the delta is frequency). Unresolved
+ * people transfers are not spending and are left out here.
  * `comparable` follows compareSpending: when false the numbers are still returned, but the headline says
  * the periods cannot be compared.
  */
@@ -211,7 +211,7 @@ function driversOf(
   }
 
   const scoped = (range: { start: IsoDate; end: IsoDate }): Transaction[] =>
-    applyQuery(txns, range).filter((t) => isSpending(t) && !isUnclassifiedOut(t) && !isUnclassifiedIn(t) && (!category || catOf(t) === category));
+    applyQuery(txns, range).filter((t) => isSpending(t) && (!category || catOf(t) === category));
   const curTx = scoped(comparison.current);
   const prevTx = scoped(comparison.previous);
   const byCat = new Map<string, number[]>();

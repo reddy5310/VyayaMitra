@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { setBusy } from '@/app/busy';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
 import { formatMonth, monthEnd, monthStart } from '@/lib/dates';
@@ -88,6 +89,12 @@ export default function ImportPage() {
   const hint = hintAccount && hintMonth ? `Import your ${hintAccount.name} statement for ${formatMonth(hintMonth)}` : undefined;
   const templates = useTemplates() ?? [];
   const [phase, setPhase] = useState<Phase>({ name: 'choose' });
+  // While a statement is being read or reviewed, an app update must wait (it would reload and lose the import).
+  const importActive = phase.name !== 'choose' && phase.name !== 'done';
+  useEffect(() => {
+    setBusy('import', importActive);
+    return () => setBusy('import', false);
+  }, [importActive]);
   const [error, setError] = useState<ErrorView | null>(null);
   const [canTeach, setCanTeach] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);

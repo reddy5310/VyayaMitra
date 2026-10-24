@@ -540,4 +540,38 @@ describe('ActivityPage', () => {
       expect(mocks.deleteRule).toHaveBeenCalledWith('rule-m');
     });
   });
+  describe('entry points to money back and fees', () => {
+    it('shows Transactions · Money back · Fees links in the header', () => {
+      mocks.useLedger.mockReturnValue(ledger([swiggy()]));
+      renderPage('/activity');
+      const nav = screen.getByRole('navigation', { name: /transactions, money back and fees/i });
+      expect(within(nav).getByRole('link', { name: 'Money back' })).toHaveAttribute('href', '/money-back');
+      expect(within(nav).getByRole('link', { name: 'Fees' })).toHaveAttribute('href', '/fees');
+    });
+
+    const open = async (t: Transaction) => {
+      mocks.useLedger.mockReturnValue(ledger([t]));
+      mocks.useTransaction.mockImplementation((id?: string) => (id === t.id ? t : undefined));
+      renderPage(`/activity?txn=${t.id}`);
+      return screen.findByRole('dialog');
+    };
+
+    it('a purchase can be tracked for a refund', async () => {
+      const dialog = await open(swiggy({ id: 'D1' }));
+      expect(within(dialog).getByRole('link', { name: 'Track expected refund' })).toHaveAttribute('href', '/money-back?track=D1');
+      expect(within(dialog).queryByRole('link', { name: 'Match this credit' })).not.toBeInTheDocument();
+    });
+
+    it('a refund-like credit can be matched', async () => {
+      const dialog = await open(swiggy({ id: 'R1', direction: 'credit', kind: 'refund', category: 'refunds' }));
+      expect(within(dialog).getByRole('link', { name: 'Match this credit' })).toHaveAttribute('href', '/money-back?match=R1');
+      expect(within(dialog).queryByRole('link', { name: 'Track expected refund' })).not.toBeInTheDocument();
+    });
+
+    it('a fee row links to its charge group', async () => {
+      const dialog = await open(swiggy({ id: 'F1', kind: 'fee', category: 'fees_charges' }));
+      expect(within(dialog).getByRole('link', { name: 'See this charge group' })).toHaveAttribute('href', '/fees?txn=F1');
+      expect(within(dialog).queryByRole('link', { name: 'Track expected refund' })).not.toBeInTheDocument();
+    });
+  });
 });

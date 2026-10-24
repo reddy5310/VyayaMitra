@@ -5,7 +5,7 @@ import { contributionsByMonth } from './goals';
 import type { ActionOutcome } from './index';
 import { spendingByMonthCategory } from './budgets';
 import { bucketTotals } from './summary';
-import { categoryResolver, contribution, isSpending, isUnclassifiedIn, UNCLASSIFIED_OUT } from './util';
+import { categoryResolver, contribution, isSpending } from './util';
 
 /** Months from `from` up to and including the month of `through`. */
 function monthsFrom(from: MonthKey, through: IsoDate): MonthKey[] {
@@ -72,7 +72,7 @@ export function evaluateSavingActions(
       const byMonth = spendingByMonthCategory(inMonths);
       total = 0;
       for (const m of months) total += byMonth.get(m)?.get(action.category)?.amount ?? 0;
-      matching = inMonths.filter((t) => (isSpending(t) && catOf(t) === action.category) || (action.category === UNCLASSIFIED_OUT && isUnclassifiedIn(t)));
+      matching = inMonths.filter((t) => isSpending(t) && catOf(t) === action.category);
     } else {
       matching = inMonths.filter(isSpending);
       total = months.reduce((s, m) => s + bucketTotals(inMonths.filter((t) => monthKey(t.date) === m)).spending, 0);

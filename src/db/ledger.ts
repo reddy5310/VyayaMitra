@@ -291,6 +291,8 @@ export function applyUnderstanding(
     reviewReasons: reviewed ? [] : [...u.reviewReasons],
   };
   if (next.reference === undefined) delete next.reference;
+  if (u.chargeType) next.chargeType = u.chargeType;
+  else delete next.chargeType;
   return next;
 }
 
@@ -308,6 +310,7 @@ const STATE_KEYS = [
   'reasons',
   'needsReview',
   'reviewReasons',
+  'chargeType',
   'linkId',
   'linkRole',
   'linkedTxnId',

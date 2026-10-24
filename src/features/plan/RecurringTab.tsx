@@ -79,6 +79,8 @@ export function RecurringTab() {
         targetMonthly: 0,
         startMonth: addMonths(monthKey(today), 1),
         status: 'active',
+        scope: { merchantKeys: [s.merchantKey] },
+        outcomeKind: 'purchase_reduction',
       });
       toast(`Noted. We will keep watching for further ${s.merchant} payments.`, { tone: 'success' });
     } catch (e) {

@@ -1,27 +1,30 @@
 import type { Account, CategoryGroup, IsoDate, MonthKey, Paise, Statement, Transaction } from '@/domain/types';
 import { categoryById } from '@/domain/categories';
-import { metricBucket, signedContribution } from '@/domain/kinds';
 import { addDays, daysBetween, monthEnd, monthStart } from '@/lib/dates';
 import { computeCoverage } from './coverage';
 import type { CategoryTotal, LedgerSummary, MerchantStat, MonthlyPoint, SummaryContext } from './index';
-import { categoryResolver, contribution, isSpending, isUnclassifiedIn, isUnclassifiedOut, minDate, UNCLASSIFIED_OUT } from './util';
+import { categoryResolver, contribution, effectiveBucket, isSpending, isUnclassifiedIn, isUnclassifiedOut, minDate, renderMarked, mk } from './util';
 
 export interface BucketTotals {
   income: Paise;
-  /** Spending after people netting (see summarize). */
+  /** Spending: unclassified p2p_out is NOT included (it is `unresolvedOut`). */
   spending: Paise;
-  /** Spending bucket total before people netting. */
+  /** Spending bucket total including unclassified p2p_out (before the unresolved split). */
   rawSpending: Paise;
   refunds: Paise;
   invested: Paise;
+  /** Gross people_in. */
   peopleIn: Paise;
+  /** Gross p2p_out. */
   peopleOut: Paise;
+  /** p2p_out still in the default 'sent_to_people' category. */
   peopleUnclassifiedOut: Paise;
+  /** p2p_in still in the default 'received_from_people' category. */
   peopleUnclassifiedIn: Paise;
-  peopleNetOut: Paise;
+  unresolvedIds: string[];
 }
 
-/** Headline totals computed straight from metricBucket + signedContribution. */
+/** Headline totals computed from metricBucket + signedContribution (plus confirmed reimbursements). */
 export function bucketTotals(txns: readonly Transaction[]): BucketTotals {
   const out: BucketTotals = {
     income: 0,
@@ -33,34 +36,37 @@ export function bucketTotals(txns: readonly Transaction[]): BucketTotals {
     peopleOut: 0,
     peopleUnclassifiedOut: 0,
     peopleUnclassifiedIn: 0,
-    peopleNetOut: 0,
+    unresolvedIds: [],
   };
   for (const t of txns) {
-    const bucket = metricBucket(t.kind, t.direction);
-    const c = signedContribution(t.kind, t.direction, t.amount);
-    switch (bucket) {
+    const c = contribution(t);
+    switch (effectiveBucket(t)) {
       case 'income':
         out.income += c;
         break;
       case 'spending':
         out.rawSpending += c;
-        if (t.kind === 'refund' && t.direction === 'credit') out.refunds += t.amount;
+        if ((t.kind === 'refund' || t.kind === 'p2p_in') && t.direction === 'credit') out.refunds += t.amount;
         if (t.kind === 'p2p_out') out.peopleOut += c;
-        if (isUnclassifiedOut(t)) out.peopleUnclassifiedOut += c;
+        if (isUnclassifiedOut(t)) {
+          out.peopleUnclassifiedOut += c;
+          out.unresolvedIds.push(t.id);
+        } else out.spending += c;
         break;
       case 'invested':
         out.invested += c;
         break;
       case 'people_in':
         out.peopleIn += c;
-        if (isUnclassifiedIn(t)) out.peopleUnclassifiedIn += c;
+        if (isUnclassifiedIn(t)) {
+          out.peopleUnclassifiedIn += c;
+          out.unresolvedIds.push(t.id);
+        }
         break;
       case 'neutral':
         break;
     }
   }
-  out.peopleNetOut = Math.max(0, out.peopleUnclassifiedOut - out.peopleUnclassifiedIn);
-  out.spending = out.rawSpending - out.peopleUnclassifiedOut + out.peopleNetOut;
   return out;
 }
 
@@ -74,6 +80,7 @@ function savingsRateFor(
   spending: Paise,
   netSavings: Paise,
   inflow: Paise,
+  unresolvedOut: Paise,
   cov: LedgerSummary['coverage'],
   accounts: readonly Account[],
 ): { savingsRate: number | null; savingsRateNote?: string } {
@@ -95,6 +102,9 @@ function savingsRateFor(
     };
   }
   if (income < Math.max(MIN_INCOME, spending * 0.05)) return { savingsRate: null, savingsRateNote: NO_REGULAR_INCOME };
+  if (unresolvedOut > income * 0.05) {
+    return { savingsRate: null, savingsRateNote: renderMarked(`${mk(unresolvedOut)} sent to people isn't classified yet, so savings may look better than they are.`) };
+  }
   const rate = (netSavings / income) * 100;
   if (Math.abs(rate) > 100 && income < inflow * 0.25) return { savingsRate: null, savingsRateNote: NO_REGULAR_INCOME };
   return { savingsRate: Math.round(rate * 10) / 10 };
@@ -163,12 +173,6 @@ export function summarize(txns: readonly Transaction[], ctx: SummaryContext): Le
     }
   }
 
-  const people = byCat.get(UNCLASSIFIED_OUT);
-  if (people) {
-    people.amount += totals.peopleNetOut - totals.peopleUnclassifiedOut;
-    if (people.amount === 0) byCat.delete(UNCLASSIFIED_OUT);
-  }
-
   const share = (amount: number): number => (totals.spending > 0 ? amount / totals.spending : 0);
   const byCategory: CategoryTotal[] = [...byCat.entries()]
     .map(([category, v]) => ({
@@ -188,7 +192,7 @@ export function summarize(txns: readonly Transaction[], ctx: SummaryContext): Le
 
   const capped = ctx.today && ctx.today >= ctx.start ? minDate(ctx.end, ctx.today) : ctx.end;
   const coverage = computeCoverage(ctx.accounts, ctx.statements, ctx.start, capped, txns);
-  const rate = savingsRateFor(totals.income, totals.spending, netSavings, inflow, coverage, ctx.accounts);
+  const rate = savingsRateFor(totals.income, totals.spending, netSavings, inflow, totals.peopleUnclassifiedOut, coverage, ctx.accounts);
 
   return {
     start: ctx.start,
@@ -196,7 +200,7 @@ export function summarize(txns: readonly Transaction[], ctx: SummaryContext): Le
     income: totals.income,
     spending: totals.spending,
     consumption: totals.rawSpending - totals.peopleOut,
-    peopleNetOut: totals.peopleNetOut,
+    unresolved: { out: totals.peopleUnclassifiedOut, in: totals.peopleUnclassifiedIn, txnIds: totals.unresolvedIds },
     peopleUnclassifiedOut: totals.peopleUnclassifiedOut,
     peopleUnclassifiedIn: totals.peopleUnclassifiedIn,
     refunds: totals.refunds,

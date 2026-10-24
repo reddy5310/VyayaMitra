@@ -22,6 +22,8 @@ const ExplorePage = lazy(() => import('@/features/explore/ExplorePage'));
 const AccountsPage = lazy(() => import('@/features/accounts/AccountsPage'));
 const AccountDetailPage = lazy(() => import('@/features/accounts/AccountDetailPage'));
 const MonthReviewPage = lazy(() => import('@/features/review/MonthReviewPage'));
+const MoneyBackPage = lazy(() => import('@/features/moneyback/MoneyBackPage'));
+const FeesPage = lazy(() => import('@/features/fees/FeesPage'));
 
 function PageFallback() {
   return (
@@ -67,6 +69,8 @@ export function AppRoutes() {
         <Route path={ROUTES.accounts} element={<Screen page={AccountsPage} />} />
         <Route path={`${ROUTES.accounts}/:accountId`} element={<Screen page={AccountDetailPage} />} />
         <Route path={ROUTES.review} element={<Screen page={MonthReviewPage} />} />
+        <Route path={ROUTES.moneyBack} element={<Screen page={MoneyBackPage} />} />
+        <Route path={ROUTES.fees} element={<Screen page={FeesPage} />} />
         <Route path="*" element={<Navigate to={ROUTES.overview} replace />} />
       </Route>
     </Routes>

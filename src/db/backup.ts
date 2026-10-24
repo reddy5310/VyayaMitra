@@ -13,14 +13,19 @@
 import { z } from 'zod';
 import type {
   Account,
+  AdviserPreference,
   AppSettings,
   Budget,
+  CardPolicy,
+  ChargeLink,
   CustomCategory,
   FeedbackEvent,
   GoalContribution,
   InsightFeedback,
   MonthReview,
   RecurringDecision,
+  RefundAllocation,
+  RefundCase,
   SavingAction,
   SavingsGoal,
   Statement,
@@ -151,6 +156,10 @@ const KINDS = [
   'investment', 'investment_return', 'loan_payment', 'loan_disbursal', 'p2p_out', 'p2p_in', 'unknown',
 ] as const;
 const kindSchema = z.enum(KINDS);
+const chargeTypeSchema = z.enum([
+  'fuel_surcharge', 'annual_fee', 'joining_fee', 'late_payment_fee', 'finance_charge', 'forex_markup', 'atm_charge',
+  'cash_advance_fee', 'processing_fee', 'convenience_fee', 'overlimit_fee', 'bank_charge', 'other_fee',
+]);
 
 const transactionSchema: z.ZodType<Transaction> = z.object({
   id: str.min(1),
@@ -193,6 +202,7 @@ const transactionSchema: z.ZodType<Transaction> = z.object({
   }),
   note: str.optional(),
   tag: z.enum(['planned', 'exceptional', 'reimbursable']).optional(),
+  chargeType: chargeTypeSchema.optional(),
   createdAt: str,
   updatedAt: str,
 });
@@ -277,7 +287,69 @@ const savingActionSchema: z.ZodType<SavingAction> = z.object({
   startMonth: str,
   status: z.enum(['active', 'completed', 'dropped']),
   insightId: str.optional(),
+  scope: z.object({ categories: z.array(str).optional(), merchantKeys: z.array(str).optional() }).optional(),
+  assumptions: z.array(str).optional(),
+  outcomeKind: z.enum(['purchase_reduction', 'goal_contribution']).optional(),
   createdAt: str,
+  updatedAt: str,
+});
+
+const refundCaseSchema: z.ZodType<RefundCase> = z.object({
+  id: str.min(1),
+  purchaseTxnIds: z.array(str),
+  merchant: str,
+  merchantKey: str,
+  expectedAmount: posPaise.optional(),
+  expectedSource: z.enum(['user', 'full_purchase', 'unknown']),
+  reason: str.optional(),
+  promisedDate: isoDate.optional(),
+  notes: str.optional(),
+  state: z.enum(['open', 'closed']),
+  closedReason: z.enum(['received', 'written_off', 'not_expected']).optional(),
+  createdAt: str,
+  updatedAt: str,
+});
+
+const refundAllocationSchema: z.ZodType<RefundAllocation> = z.object({
+  id: str.min(1),
+  caseId: str.min(1),
+  creditTxnId: str.min(1),
+  purchaseTxnId: str.optional(),
+  amount: posPaise,
+  source: z.enum(['auto', 'user']),
+  reason: str,
+  createdAt: str,
+});
+
+const chargeLinkSchema: z.ZodType<ChargeLink> = z.object({
+  id: str.min(1),
+  groupId: str.min(1),
+  txnId: str.min(1),
+  chargeType: chargeTypeSchema,
+  role: z.enum(['charge', 'tax', 'reversal', 'tax_reversal']),
+  relatedPurchaseTxnId: str.optional(),
+  source: z.enum(['auto', 'user']),
+  reason: str,
+});
+
+const cardPolicySchema: z.ZodType<CardPolicy> = z.object({
+  id: str.min(1),
+  accountId: str.min(1),
+  chargeType: chargeTypeSchema,
+  summary: str,
+  waiverMinPurchase: posPaise.optional(),
+  waiverMaxPurchase: posPaise.optional(),
+  cycleCap: posPaise.optional(),
+  taxReversed: z.boolean().nullable(),
+  effectiveFrom: isoDate.optional(),
+  sourceNote: str.optional(),
+  createdAt: str,
+  updatedAt: str,
+});
+
+const adviserPreferenceSchema: z.ZodType<AdviserPreference> = z.object({
+  category: str.min(1),
+  preference: z.enum(['protected', 'essential', 'fixed', 'adjustable']),
   updatedAt: str,
 });
 
@@ -353,6 +425,11 @@ const dataSchema = z.object({
   feedback: z.array(feedbackSchema),
   insightFeedback: z.array(insightFeedbackSchema),
   monthReviews: z.array(monthReviewSchema),
+  refundCases: z.array(refundCaseSchema),
+  refundAllocations: z.array(refundAllocationSchema),
+  chargeLinks: z.array(chargeLinkSchema),
+  cardPolicies: z.array(cardPolicySchema),
+  adviserPreferences: z.array(adviserPreferenceSchema),
   settings: settingsSchema.optional(),
 });
 
@@ -398,6 +475,11 @@ const TABLE_NAMES = [
   'feedback',
   'insightFeedback',
   'monthReviews',
+  'refundCases',
+  'refundAllocations',
+  'chargeLinks',
+  'cardPolicies',
+  'adviserPreferences',
 ] as const;
 
 function countsOf(data: BackupData): Record<string, number> {
@@ -473,12 +555,16 @@ function requireSupportedVersion(version: number | undefined): void {
  * Lift older backups to the current layout.
  *  v1 → v2: adds the self-training tables (templates, feedback), which v1 files do not have.
  *  v2 → v3: adds the review-workspace tables (insightFeedback, monthReviews).
+ *  v3 → v4: adds the money-back tables (refundCases, refundAllocations, chargeLinks, cardPolicies, adviserPreferences).
  */
 export function migrateBackupData(data: unknown, fromVersion: number): unknown {
   if (typeof data !== 'object' || data === null) return data;
   let out = { ...(data as Record<string, unknown>) };
   if (fromVersion < 2) out = { templates: [], feedback: [], ...out };
   if (fromVersion < 3) out = { insightFeedback: [], monthReviews: [], ...out };
+  if (fromVersion < 4) {
+    out = { refundCases: [], refundAllocations: [], chargeLinks: [], cardPolicies: [], adviserPreferences: [], ...out };
+  }
   return out;
 }
 
@@ -529,6 +615,19 @@ function checkIntegrity(data: BackupData): void {
     fps.add(key);
   }
   for (const c of data.goalContributions) if (!goals.has(c.goalId)) bad('a contribution without its goal');
+  const cases = ids(data.refundCases, 'refund cases');
+  ids(data.refundAllocations, 'refund allocations');
+  ids(data.chargeLinks, 'charge links');
+  ids(data.cardPolicies, 'card policies');
+  for (const a of data.refundAllocations) if (!cases.has(a.caseId)) bad('an allocation without its refund case');
+  const credited = new Map<string, number>();
+  const amountOf = new Map(data.transactions.map((t) => [t.id, t.amount]));
+  for (const a of data.refundAllocations) {
+    const total = (credited.get(a.creditTxnId) ?? 0) + a.amount;
+    credited.set(a.creditTxnId, total);
+    const credit = amountOf.get(a.creditTxnId);
+    if (credit !== undefined && total > credit) bad('a credit allocated more than its amount');
+  }
 }
 
 async function openBackup(file: Blob, passphrase: string | undefined): Promise<{ plain: PlainBackup }> {
@@ -571,7 +670,7 @@ async function openBackup(file: Blob, passphrase: string | undefined): Promise<{
 
 async function collect(): Promise<BackupData> {
   return readAll(async () => {
-    const [accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews, settings] =
+    const [accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews, refundCases, refundAllocations, chargeLinks, cardPolicies, adviserPreferences, settings] =
       await Promise.all([
         db.accounts.toArray(),
         db.statements.toArray(),
@@ -587,10 +686,15 @@ async function collect(): Promise<BackupData> {
         db.feedback.toArray(),
         db.insightFeedback.toArray(),
         db.monthReviews.toArray(),
+        db.refundCases.toArray(),
+        db.refundAllocations.toArray(),
+        db.chargeLinks.toArray(),
+        db.cardPolicies.toArray(),
+        db.adviserPreferences.toArray(),
         db.meta.get(META_SETTINGS),
       ]);
     const data: BackupData = {
-      accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews,
+      accounts, statements, transactions, rules, customCategories, budgets, goals, goalContributions, recurringDecisions, savingActions, templates, feedback, insightFeedback, monthReviews, refundCases, refundAllocations, chargeLinks, cardPolicies, adviserPreferences,
     };
     if (settings?.value) data.settings = settingsSchema.parse(settings.value);
     return data;
@@ -679,6 +783,11 @@ export async function restoreBackup(
       await db.feedback.bulkAdd(data.feedback);
       await db.insightFeedback.bulkAdd(data.insightFeedback);
       await db.monthReviews.bulkAdd(data.monthReviews);
+      await db.refundCases.bulkAdd(data.refundCases);
+      await db.refundAllocations.bulkAdd(data.refundAllocations);
+      await db.chargeLinks.bulkAdd(data.chargeLinks);
+      await db.cardPolicies.bulkAdd(data.cardPolicies);
+      await db.adviserPreferences.bulkAdd(data.adviserPreferences);
       if (data.settings) await db.meta.put({ key: META_SETTINGS, value: data.settings });
       await retrainLearnedModel();
       await rebuildCalibration();
@@ -740,6 +849,14 @@ export async function restoreBackup(
     const freshMonths = data.monthReviews.filter((r) => !haveMonths.has(r.month));
     await db.monthReviews.bulkAdd(freshMonths);
     counts.monthReviews = freshMonths.length;
+    await addNew('refundCases', db.refundCases, data.refundCases);
+    await addNew('refundAllocations', db.refundAllocations, data.refundAllocations);
+    await addNew('chargeLinks', db.chargeLinks, data.chargeLinks);
+    await addNew('cardPolicies', db.cardPolicies, data.cardPolicies);
+    const havePrefs = new Set((await db.adviserPreferences.toCollection().primaryKeys()) as string[]);
+    const freshPrefs = data.adviserPreferences.filter((p) => !havePrefs.has(p.category));
+    await db.adviserPreferences.bulkAdd(freshPrefs);
+    counts.adviserPreferences = freshPrefs.length;
     if (data.settings && !(await db.meta.get(META_SETTINGS))) {
       await db.meta.put({ key: META_SETTINGS, value: data.settings });
     }

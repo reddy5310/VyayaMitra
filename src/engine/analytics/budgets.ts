@@ -2,7 +2,7 @@ import type { Account, Budget, IsoDate, MonthKey, Paise, Statement, Transaction 
 import { addMonths, daysInMonth, monthEnd, monthKey, monthStart } from '@/lib/dates';
 import { computeCoverage } from './coverage';
 import type { BudgetStatus } from './index';
-import { categoryResolver, contribution, isSpending, isUnclassifiedIn, isUnclassifiedOut, peopleNetOut, UNCLASSIFIED_OUT } from './util';
+import { categoryResolver, contribution, isSpending } from './util';
 
 /**
  * Month-by-month net spending per category (via the shared category resolver, so a linked refund
@@ -11,7 +11,6 @@ import { categoryResolver, contribution, isSpending, isUnclassifiedIn, isUnclass
 export function spendingByMonthCategory(txns: readonly Transaction[]): Map<MonthKey, Map<string, { amount: Paise; ids: string[] }>> {
   const catOf = categoryResolver(txns);
   const out = new Map<MonthKey, Map<string, { amount: Paise; ids: string[] }>>();
-  const monthOf = new Map<MonthKey, Transaction[]>();
   for (const t of txns) {
     const m = monthKey(t.date);
     if (isSpending(t)) {
@@ -23,21 +22,6 @@ export function spendingByMonthCategory(txns: readonly Transaction[]): Map<Month
       cur.ids.push(t.id);
       cats.set(c, cur);
     }
-    if (isUnclassifiedOut(t) || isUnclassifiedIn(t)) {
-      const list = monthOf.get(m);
-      if (list) list.push(t);
-      else monthOf.set(m, [t]);
-    }
-  }
-  // People netting: unclassified inflows offset unclassified outflows within the month.
-  for (const [m, list] of monthOf) {
-    const cats = out.get(m);
-    const entry = cats?.get(UNCLASSIFIED_OUT);
-    if (!cats || !entry) continue;
-    const flows = peopleNetOut(list);
-    entry.amount += flows.netOut - flows.out;
-    for (const t of list) if (isUnclassifiedIn(t)) entry.ids.push(t.id);
-    if (entry.amount === 0) cats.delete(UNCLASSIFIED_OUT);
   }
   return out;
 }
@@ -64,11 +48,8 @@ export function budgetStatuses(
   const dayOfMonth = Number(ctx.today.slice(8, 10));
 
   return budgets.map((budget) => {
-    const matching = monthTxns.filter(
-      (t) => (isSpending(t) && catOf(t) === budget.category) || (budget.category === UNCLASSIFIED_OUT && isUnclassifiedIn(t)),
-    );
-    // 'sent_to_people' is netted against money received from people (unclassified flows only).
-    const raw = budget.category === UNCLASSIFIED_OUT ? peopleNetOut(monthTxns).netOut + matching.filter((t) => isSpending(t) && !isUnclassifiedOut(t)).reduce((s, t) => s + contribution(t), 0) : matching.reduce((s, t) => s + contribution(t), 0);
+    const matching = monthTxns.filter((t) => isSpending(t) && catOf(t) === budget.category);
+    const raw = matching.reduce((s, t) => s + contribution(t), 0);
     const spent = Math.max(0, raw);
     const usage = budget.monthlyLimit > 0 ? spent / budget.monthlyLimit : spent > 0 ? Infinity : 0;
     const expectedByToday = isCurrent ? Math.round((budget.monthlyLimit * dayOfMonth) / dim) : undefined;

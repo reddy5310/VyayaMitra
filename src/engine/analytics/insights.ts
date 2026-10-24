@@ -1,7 +1,6 @@
 import type { Account, IsoDate, MonthKey, Paise, SavingAction, Transaction } from '@/domain/types';
 import { categoryName } from '@/domain/categories';
 import { addDays, addMonths, formatDate, formatMonth, monthEnd, monthKey, monthStart } from '@/lib/dates';
-import { formatINR } from '@/lib/money';
 import { evaluateSavingActions } from './actions';
 import { averagesOverMonths, budgetStatuses, completeMonths, spendingByMonthCategory } from './budgets';
 import { upcomingCardDues } from './cardDues';
@@ -10,10 +9,31 @@ import type { Coverage, Insight, InsightInput } from './index';
 import { applyQuery } from './query';
 import { detectRecurring, isSeriesActive } from './recurring';
 import { bucketTotals, summarize } from './summary';
-import { categoryResolver, formatRange, hashId, isSpending, isWholeMonth, median, minDate, sameDayInMonth, shortMonthYear } from './util';
+import { categoryResolver, mk, partsOf, renderMarked, soleAmount, formatRange, hashId, isSpending, isWholeMonth, median, minDate, sameDayInMonth, shortMonthYear } from './util';
 
 const MAX_INSIGHTS = 8;
-const inr = (p: Paise): string => formatINR(Math.round(p), { whole: true });
+const inr = (p: Paise): string => mk(p);
+
+/** Renders amount markers to plain rupees and adds structured parts so the UI can mask every amount. */
+function finalize(i: Insight): Insight {
+  const hasMark = (v: string): boolean => v.includes('');
+  return {
+    ...i,
+    title: renderMarked(i.title),
+    body: renderMarked(i.body),
+    ...(hasMark(i.title) ? { titleParts: partsOf(i.title) } : {}),
+    ...(hasMark(i.body) ? { bodyParts: partsOf(i.body) } : {}),
+    ...(i.basis ? { basis: renderMarked(i.basis) } : {}),
+    ...(i.action ? { action: { ...i.action, label: renderMarked(i.action.label) } } : {}),
+    evidence: {
+      ...i.evidence,
+      figures: i.evidence.figures.map((f) => {
+        const amount = soleAmount(f.value);
+        return { label: renderMarked(f.label), value: renderMarked(f.value), ...(amount !== undefined ? { amount } : {}) };
+      }),
+    },
+  };
+}
 
 interface Scored {
   score: number;
@@ -86,7 +106,7 @@ export function generateInsights(input: InsightInput): Insight[] {
   const backNote = expectedBack > 0 ? ` ${inr(expectedBack)} of this is tagged as expected back.` : '';
   const scored: Scored[] = [];
   const add = (score: number, insight: Insight): void => {
-    scored.push({ score, insight: { ...insight, key: keyById.get(insight.id) ?? insight.type } });
+    scored.push({ score, insight: finalize({ ...insight, key: keyById.get(insight.id) ?? insight.type }) });
   };
 
   const focal: MonthKey = monthKey(effEnd);
@@ -351,33 +371,29 @@ export function generateInsights(input: InsightInput): Insight[] {
     }
   }
 
-  // ── Sent to people (unclassified flows, netted) ──────────────────────────────────────────
+  // ── Sent to people (unresolved: not spending, not income, until classified) ──────────────
   {
     const totals = bucketTotals(periodTxns);
     const out = totals.peopleUnclassifiedOut;
     const inn = totals.peopleUnclassifiedIn;
-    const grossSpending = totals.rawSpending;
-    if (grossSpending > 0 && out >= 200_000 && out / grossSpending >= 0.3) {
-      const net = totals.peopleNetOut;
+    if (totals.rawSpending > 0 && out >= 200_000 && out / totals.rawSpending >= 0.3) {
       const outs = periodTxns.filter((t) => t.kind === 'p2p_out' && t.category === 'sent_to_people' && t.direction === 'debit');
       const ins = periodTxns.filter((t) => t.kind === 'p2p_in' && t.category === 'received_from_people');
-      const netText = net > 0 ? `net ${inr(net)} counted as spending` : inn > out ? `net ${inr(inn - out)} more came in than went out, which is not counted as income` : 'net nothing';
       add(65, {
         id: makeId('people_out', 'p2p', periodKey),
         type: 'people_out',
         severity: 'info',
-        title: `${inr(out)} sent to and ${inr(inn)} received from people`,
-        body: `${inr(out)} sent and ${inr(inn)} received from people in ${label}, ${netText}; review who they are. Moving a person to a category such as Family support counts their payments in full, and marking money from a person as income counts it as income.${tentative ? ' Some statements are missing, so these figures may be incomplete.' : ''}`,
+        title: `${inr(out)} unresolved: classify transfers to people`,
+        body: `${inr(out)} sent to and ${inr(inn)} received from people in ${label} is unresolved, so it is not counted as spending or income. Classify each person (for example rent or family support) so it counts correctly.${tentative ? ' Some statements are missing, so these figures may be incomplete.' : ''}`,
         evidence: {
           txnIds: [...topIds(outs, 6), ...topIds(ins, 4)],
           figures: [
-            { label: 'Sent to people', value: inr(out) },
-            { label: 'Received from people', value: inr(inn) },
-            { label: 'Net counted as spending', value: inr(net) },
+            { label: 'Sent to people, unresolved', value: inr(out) },
+            { label: 'Received from people, unresolved', value: inr(inn) },
           ],
         },
-        basis: `People transfers in ${label} that are not yet classified (still in the default Sent to people / Received from people categories).`,
-        action: { type: 'review_transactions', label: 'Review transfers to people' },
+        basis: `People transfers in ${label} still in the default Sent to people / Received from people categories.`,
+        action: { type: 'review_transactions', label: 'Classify transfers to people' },
       });
     }
   }

@@ -9,6 +9,7 @@ import { dataStatus, monthReviewData, type Insight } from '@/engine/analytics';
 import { addMonths, formatMonth, monthKey, todayIso } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, Money, Skeleton, cn, useToast } from '@/ui';
 import { ChangesStep, ImportsStep, NextStep, PlanStep, UncertaintyStep } from './steps';
+import { MaskedText } from '@/features/overview/InsightText';
 import { LinkButton } from './LinkButton';
 
 const STEPS = ['Imports', 'Uncertainties', 'Changes', 'Plan', 'Next month'] as const;
@@ -210,7 +211,7 @@ function SummaryCard({
       <dl className="space-y-3 text-sm">
         <div>
           <dt className="font-semibold text-fg">What changed</dt>
-          <dd className="text-fg-muted">{ch && ch.comparable ? ch.headline : 'No fair comparison was possible this month.'}</dd>
+          <dd className="text-fg-muted">{ch && ch.comparable ? <MaskedText text={ch.headline} /> : 'No fair comparison was possible this month.'}</dd>
         </div>
         <div>
           <dt className="font-semibold text-fg">What you expected</dt>
@@ -245,7 +246,9 @@ function SummaryCard({
             ) : (
               <ul className="list-disc pl-5">
                 {data.uncertain.map((u) => (
-                  <li key={u}>{u}</li>
+                  <li key={u}>
+                    <MaskedText text={u} />
+                  </li>
                 ))}
               </ul>
             )}
@@ -257,7 +260,9 @@ function SummaryCard({
             {chosen.length > 0 ? (
               <ul className="list-disc pl-5">
                 {chosen.map((c) => (
-                  <li key={c.id}>{c.title}</li>
+                  <li key={c.id}>
+                    <MaskedText text={c.title} />
+                  </li>
                 ))}
               </ul>
             ) : existingCount > 0 ? (

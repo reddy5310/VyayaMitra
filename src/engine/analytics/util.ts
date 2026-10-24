@@ -2,15 +2,32 @@
 import type { IsoDate, MonthKey, Paise, Transaction } from '@/domain/types';
 import { UNCATEGORIZED } from '@/domain/categories';
 import { metricBucket, signedContribution } from '@/domain/kinds';
+import type { MetricBucket } from '@/domain/kinds';
+import { formatINR } from '@/lib/money';
 import { addMonths, daysInMonth, formatDate, formatMonth, monthEnd, monthKey, monthStart } from '@/lib/dates';
+
+/** A p2p_in the user categorised as 'refunds' is a confirmed reimbursement: it offsets spending. */
+function isReimbursement(t: Transaction): boolean {
+  return t.kind === 'p2p_in' && t.category === 'refunds';
+}
+
+/** metricBucket, except that a confirmed reimbursement (p2p_in in 'refunds') belongs to spending. */
+export function effectiveBucket(t: Transaction): MetricBucket {
+  return isReimbursement(t) ? 'spending' : metricBucket(t.kind, t.direction);
+}
 
 /** Signed contribution of a transaction to its own bucket (see src/domain/kinds.ts). */
 export function contribution(t: Transaction): Paise {
+  if (isReimbursement(t)) return t.direction === 'credit' ? -t.amount : t.amount;
   return signedContribution(t.kind, t.direction, t.amount);
 }
 
+/**
+ * Counts toward spending. Unclassified p2p_out (still in 'sent_to_people') is NOT spending: it is
+ * "unresolved" until the user says what it was.
+ */
 export function isSpending(t: Transaction): boolean {
-  return metricBucket(t.kind, t.direction) === 'spending';
+  return effectiveBucket(t) === 'spending' && !isUnclassifiedOut(t);
 }
 
 export function sum(values: Iterable<number>): number {
@@ -43,7 +60,7 @@ export function categoryResolver(all: readonly Transaction[]): (t: Transaction) 
   const byId = new Map<string, Transaction>();
   for (const t of all) byId.set(t.id, t);
   return (t) => {
-    if (t.kind === 'refund' && t.direction === 'credit' && t.linkedTxnId && (t.category === 'refunds' || t.category === UNCATEGORIZED)) {
+    if ((t.kind === 'refund' || t.kind === 'p2p_in') && t.direction === 'credit' && t.linkedTxnId && (t.category === 'refunds' || t.category === UNCATEGORIZED)) {
       const original = byId.get(t.linkedTxnId);
       if (original && original.category && original.category !== 'refunds') return original.category;
     }
@@ -124,13 +141,34 @@ export function isUnclassifiedIn(t: Transaction): boolean {
   return t.kind === 'p2p_in' && t.category === UNCLASSIFIED_IN;
 }
 
-/** Net unclassified people outflow: max(0, out - in). A net inflow is never income. */
-export function peopleNetOut(txns: readonly Transaction[]): { out: Paise; in: Paise; netOut: Paise } {
-  let out = 0;
-  let inn = 0;
-  for (const t of txns) {
-    if (isUnclassifiedOut(t)) out += contribution(t);
-    else if (isUnclassifiedIn(t)) inn += signedContribution(t.kind, t.direction, t.amount);
+// ─── Amount markers: text that can be rendered either as plain rupees or as masked <Money> parts ─────
+
+const MARK_RE = /(-?\d+)/g;
+
+/** Embeds an amount in a string; `renderMarked` / `partsOf` turn it into text or structured parts. */
+export function mk(paise: Paise): string {
+  return `${Math.round(paise)}`;
+}
+
+export function renderMarked(s: string): string {
+  return s.replace(MARK_RE, (_m, p: string) => formatINR(Number(p), { whole: true }));
+}
+
+/** Splits a marked string into plain strings and `{ paise }` parts. */
+export function partsOf(s: string): (string | { paise: Paise })[] {
+  const out: (string | { paise: Paise })[] = [];
+  let last = 0;
+  for (const m of s.matchAll(MARK_RE)) {
+    if (m.index > last) out.push(s.slice(last, m.index));
+    out.push({ paise: Number(m[1]) });
+    last = m.index + m[0].length;
   }
-  return { out, in: inn, netOut: Math.max(0, out - inn) };
+  if (last < s.length) out.push(s.slice(last));
+  return out;
+}
+
+/** The amount when the whole string is exactly one marked amount. */
+export function soleAmount(s: string): Paise | undefined {
+  const m = /^(-?\d+)$/.exec(s);
+  return m ? Number(m[1]) : undefined;
 }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Download, SearchX } from 'lucide-react';
 import { usePageChrome } from '@/app/chrome';
+import { ROUTES } from '@/app/routes';
 import { usePeriod } from '@/app/period';
 import { useLedger, useRecurringDecisions } from '@/db/hooks';
 import { todayIso } from '@/lib/dates';
@@ -204,6 +205,17 @@ export default function ActivityPage() {
       <p className="sr-only">Keyboard shortcuts: j and k move between transactions, Enter opens one, slash searches, Escape closes details.</p>
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_26rem] lg:items-start lg:gap-5">
       <div className="min-w-0 space-y-3">
+      <nav aria-label="Transactions, money back and fees" className="flex flex-wrap gap-x-1 text-sm">
+        <span aria-current="page" className="inline-flex min-h-9 items-center rounded-lg bg-surface-2 px-3 font-medium text-fg">
+          Transactions
+        </span>
+        <Link to={ROUTES.moneyBack} className="inline-flex min-h-9 items-center rounded-lg px-3 text-fg-muted hover:bg-surface-2 hover:text-fg">
+          Money back
+        </Link>
+        <Link to={ROUTES.fees} className="inline-flex min-h-9 items-center rounded-lg px-3 text-fg-muted hover:bg-surface-2 hover:text-fg">
+          Fees
+        </Link>
+      </nav>
       <ShortcutHelp openSignal={helpSignal} />
       {filters.ids.length > 0 && (
         <Notice

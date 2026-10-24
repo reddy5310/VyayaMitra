@@ -5,6 +5,7 @@ import { formatDate, isIsoDate, todayIso } from '@/lib/dates';
 import { formatINR } from '@/lib/money';
 import { Button, Field, Input, Notice, Select, Sheet, useToast } from '@/ui';
 import { paiseToInput, parseRupeeInput } from './amount';
+import { useMask } from '@/features/overview/mask';
 import { errorMessage } from './errors';
 
 interface Props {
@@ -18,6 +19,7 @@ interface Props {
 /** Record money added to, or taken out of, a goal. A deposit can be tied to an imported investment so it counts as verified. */
 export function ContributionSheet({ goal, type, transactions, existing, onClose }: Props) {
   const { toast } = useToast();
+  const mask = useMask();
   const [date, setDate] = useState(todayIso());
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
@@ -130,7 +132,7 @@ export function ContributionSheet({ goal, type, transactions, existing, onClose 
                 <option value="">Not linked</option>
                 {linkable.map((t) => (
                   <option key={t.id} value={t.id}>
-                    {formatDate(t.date, { short: true })} · {t.merchant} · {formatINR(t.amount)}
+                    {formatDate(t.date, { short: true })} · {t.merchant} · {mask(formatINR(t.amount))}
                   </option>
                 ))}
               </Select>

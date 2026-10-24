@@ -44,6 +44,21 @@ interface Run {
   confidence: number;
 }
 
+/** Index of the earliest day from which every interval to the end fits `spec` (one missed cycle allowed). */
+function earliestFit(ivs: readonly number[], spec: { lo: number; hi: number }): number {
+  let idx = ivs.length;
+  let missed = 0;
+  while (idx > 0) {
+    const iv = ivs[idx - 1];
+    if (iv >= spec.lo && iv <= spec.hi) idx--;
+    else if (iv >= 2 * spec.lo && iv <= 2 * spec.hi && missed === 0) {
+      missed++;
+      idx--;
+    } else break;
+  }
+  return idx;
+}
+
 /** Does this run of payment days look like one recurring series? */
 function evaluateRun(days: readonly Day[]): Run | null {
   const k = days.length;
@@ -131,22 +146,29 @@ export function detectRecurring(
 
   const out: RecurringSeries[] = [];
   for (const [key, list] of groups) {
+    if (list.length < 2 && decisionByKey.get(key)?.status !== 'confirmed') continue;
     list.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     const decision = decisionByKey.get(key);
 
-    const byDay = new Map<IsoDate, Day>();
+    const days: Day[] = [];
     for (const t of list) {
-      const d = byDay.get(t.date);
-      if (d) {
+      const d = days[days.length - 1];
+      if (d && d.date === t.date) {
         d.amount += t.amount;
         d.ids.push(t.id);
-      } else byDay.set(t.date, { date: t.date, amount: t.amount, ids: [t.id] });
+      } else days.push({ date: t.date, amount: t.amount, ids: [t.id] });
     }
-    const days = [...byDay.values()];
+
+    // Only suffixes whose intervals fit some cadence window can pass, so walk back from the newest
+    // payment to find the earliest possible start (keeps this linear for busy merchants).
+    const ivs: number[] = [];
+    for (let i = 1; i < days.length; i++) ivs.push(daysBetween(days[i - 1].date, days[i].date));
+    let first = days.length - 1;
+    for (const spec of CADENCES) first = Math.min(first, earliestFit(ivs, spec));
 
     let run: Run | null = null;
     let used: Day[] = days;
-    for (let s = 0; s <= days.length - 2; s++) {
+    for (let s = first; s <= days.length - 2; s++) {
       const r = evaluateRun(days.slice(s));
       if (r) {
         run = r;

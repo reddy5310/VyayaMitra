@@ -28,6 +28,8 @@ import { recall, rank, handleKey, MIN_PROBABILITY } from './learned';
 import { findOwnByHandle, findOwnByMask, findOwnByName, type OwnHit } from './ownership';
 import { parseDescription, type ParsedDescription } from './parse';
 import { PhraseIndex } from './phrases';
+import { chargeLabel, classifyCharge } from './charges';
+import type { ChargeType } from '@/domain/types';
 import { selectRules, type RuleDecision } from './rules';
 import { isFamilyRemark, SIGNALS } from './signals';
 import { calibrateConfidence } from './selftrain';
@@ -82,6 +84,9 @@ interface Decision {
   forceLabel?: boolean;
   channel?: Channel;
   review?: string;
+  /** Stable merchantKey for forceLabel decisions (defaults to the canonical label). */
+  key?: string;
+  chargeType?: ChargeType;
 }
 
 const ALL_CATEGORY_GROUPS = new Map(BUILTIN_CATEGORIES.map((c) => [c.id, c.group]));
@@ -224,14 +229,18 @@ function decideKind(env: Env): Decision {
   // 3. fees and charges (debits); fee waivers/reversals (credits)
   if (!lowRail && SIGNALS.fee.test(U) && !(entity && entity.role === 'investment')) {
     if (debit) {
-      return { kind: 'fee', src: 'rule', conf: 0.85, cpType: 'bank', reasons: ['Bank or card charge (fee, GST or finance charge)'], label: isCard ? 'Card charges' : 'Bank charges', forceLabel: true, channel: 'CHARGE' };
+      const info = classifyCharge(parsed.upper, isCard);
+      const { label, key } = chargeLabel(info, false);
+      return { kind: 'fee', src: 'rule', conf: 0.85, cpType: 'bank', reasons: [info.tax ? `${label}: tax charged on a fee` : `${label}: bank or card charge`], label, key, chargeType: info.chargeType, forceLabel: true, channel: 'CHARGE' };
     }
     if (SIGNALS.feeWaiver.test(U)) {
-      return { kind: 'refund', src: 'rule', conf: 0.75, cpType: 'bank', reasons: ['Charge waived or reversed'], category: 'fees_charges', catSrc: 'builtin_rule', label: 'Charges reversed', forceLabel: true, channel: 'CHARGE' };
+      const info = classifyCharge(parsed.upper, isCard);
+      const { label, key } = chargeLabel(info, true);
+      return { kind: 'refund', src: 'rule', conf: 0.75, cpType: 'bank', reasons: [`${label}: charge waived or reversed`], category: 'fees_charges', catSrc: 'builtin_rule', label, key, chargeType: info.chargeType, forceLabel: true, channel: 'CHARGE' };
     }
   }
   if (isCard && debit && SIGNALS.cardInterest.test(parsed.upper)) {
-    return { kind: 'fee', src: 'rule', conf: 0.85, cpType: 'bank', reasons: ['Interest charged on the card'], label: 'Interest charged', forceLabel: true, channel: 'CHARGE' };
+    return { kind: 'fee', src: 'rule', conf: 0.85, cpType: 'bank', reasons: ['Interest charged on the card'], label: 'Finance charge', key: 'charge:finance_charge', chargeType: 'finance_charge', forceLabel: true, channel: 'CHARGE' };
   }
   if (!lowRail && debit && SIGNALS.interestDebit.test(U)) {
     return { kind: 'fee', src: 'rule', conf: 0.85, cpType: 'bank', reasons: ['Interest charged'], label: 'Interest charged', forceLabel: true, channel: 'CHARGE' };
@@ -431,7 +440,7 @@ function resolveMerchant(env: Env, d: Decision): { display: string; key: string 
 function resolveMerchantRaw(env: Env, d: Decision): { display: string; key: string } {
   const { parsed, entity, brand, vpaInfo } = env;
   const fromLabel = (label: string) => ({ display: label, key: canon(label) });
-  if (d.forceLabel && d.label) return fromLabel(d.label);
+  if (d.forceLabel && d.label) return d.key ? { display: d.label, key: d.key } : fromLabel(d.label);
   if (entity && entity.role !== 'employer') return fromLabel(entity.name);
   if (brand) return fromLabel(brand.brand.name);
   if (entity) return fromLabel(entity.name);
@@ -701,6 +710,7 @@ export function understandTransaction(input: UnderstandInput, ctx: UnderstandCon
     needsReview: reviewReasons.length > 0,
     reviewReasons,
   };
+  if (decision.chargeType && (kind === 'fee' || (kind === 'refund' && category.id === 'fees_charges'))) out.chargeType = decision.chargeType;
   const reference = parsed.reference ?? input.reference;
   if (reference) out.reference = reference;
   return out;

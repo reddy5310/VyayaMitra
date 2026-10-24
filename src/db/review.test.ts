@@ -77,11 +77,11 @@ describe('schema v2 -> v3 migration', () => {
 
     const v3 = new VyayaMitraDB(name);
     await v3.open();
-    expect(v3.verno).toBe(3);
+    expect(v3.verno).toBe(4);
     expect(await v3.transactions.count()).toBe(1);
     expect(await v3.accounts.count()).toBe(1);
     expect(await v3.feedback.count()).toBe(1);
-    expect((await v3.meta.get(META_MIGRATIONS))!.value).toMatchObject([{ version: 2 }, { version: 3 }]);
+    expect((await v3.meta.get(META_MIGRATIONS))!.value).toMatchObject([{ version: 2 }, { version: 3 }, { version: 4 }]);
     await v3.insightFeedback.add({ id: 'i', key: 'k', insightId: 'x', action: 'dismissed', at: 't' });
     await v3.monthReviews.put({ month: '2025-01', status: 'in_progress', notes: [], nextActionIds: [], updatedAt: 't' });
     expect(await v3.insightFeedback.where('key').equals('k').count()).toBe(1);

@@ -198,6 +198,8 @@ export interface Transaction {
   note?: string;
   /** User's label for a large or unusual expense: it stays in totals but stops raising generic alerts. */
   tag?: ExpenseTag;
+  /** Structured meaning of a fee row (understanding output); undefined for non-fee rows. */
+  chargeType?: ChargeType;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -507,6 +509,12 @@ export interface SavingAction {
   startMonth: MonthKey;
   status: 'active' | 'completed' | 'dropped';
   insightId?: string;
+  /** What the action covers, so overlapping actions are never double counted. */
+  scope?: { categories?: string[]; merchantKeys?: string[] };
+  /** Assumptions shown with the estimate ("replacement meals also cost money"). */
+  assumptions?: string[];
+  /** What the outcome measures — never summed across kinds. */
+  outcomeKind?: 'purchase_reduction' | 'goal_contribution';
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -544,5 +552,106 @@ export interface MonthReview {
   /** SavingAction ids chosen as next month's adjustments. */
   nextActionIds: string[];
   completedAt?: Timestamp;
+  updatedAt: Timestamp;
+}
+
+// ─── Money back (refund cases) ───────────────────────────────────────────────
+
+/**
+ * A purchase the user expects money back for (or an unmatched credit). Statements prove what was
+ * received; what is EXPECTED usually comes from the user, so `expectedSource` says how it was set.
+ */
+export interface RefundCase {
+  id: string;
+  /** Purchases this case is about (one or more). Empty for an unmatched credit awaiting matching. */
+  purchaseTxnIds: string[];
+  merchant: string;
+  merchantKey: string;
+  /** Unknown → the UI shows "Amount to confirm", never a percentage. */
+  expectedAmount?: Paise;
+  expectedSource: 'user' | 'full_purchase' | 'unknown';
+  reason?: string;
+  promisedDate?: IsoDate;
+  notes?: string;
+  /** User intent; the received/outstanding state is always computed from allocations. */
+  state: 'open' | 'closed';
+  closedReason?: 'received' | 'written_off' | 'not_expected';
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+/** Part (or all) of a received credit allocated to a case / purchase. One credit can be split; never over-allocated. */
+export interface RefundAllocation {
+  id: string;
+  caseId: string;
+  creditTxnId: string;
+  purchaseTxnId?: string;
+  amount: Paise;
+  source: 'auto' | 'user';
+  reason: string;
+  createdAt: Timestamp;
+}
+
+// ─── Fees & charges ──────────────────────────────────────────────────────────
+
+export type ChargeType =
+  | 'fuel_surcharge'
+  | 'annual_fee'
+  | 'joining_fee'
+  | 'late_payment_fee'
+  | 'finance_charge'
+  | 'forex_markup'
+  | 'atm_charge'
+  | 'cash_advance_fee'
+  | 'processing_fee'
+  | 'convenience_fee'
+  | 'overlimit_fee'
+  | 'bank_charge'
+  | 'other_fee';
+
+/** One component of a charge event: the charge, its tax, and any reversal of either. */
+export interface ChargeLink {
+  id: string;
+  /** Shared by all components of one charge event (e.g. surcharge + its GST + reversal). */
+  groupId: string;
+  txnId: string;
+  chargeType: ChargeType;
+  role: 'charge' | 'tax' | 'reversal' | 'tax_reversal';
+  /** The purchase that triggered it (fuel purchase for a fuel surcharge), when evidence supports it. */
+  relatedPurchaseTxnId?: string;
+  source: 'auto' | 'user';
+  reason: string;
+}
+
+/**
+ * Card terms the USER records from their card's published terms (VyayaMitra never invents issuer rules).
+ * Used only to say a charge "might qualify for reversal — check your terms".
+ */
+export interface CardPolicy {
+  id: string;
+  accountId: string;
+  chargeType: ChargeType;
+  /** Plain summary in the user's words, e.g. "1% fuel surcharge waived on ₹400–₹4,000, max ₹100 a cycle". */
+  summary: string;
+  waiverMinPurchase?: Paise;
+  waiverMaxPurchase?: Paise;
+  /** Max surcharge waived per statement cycle. */
+  cycleCap?: Paise;
+  /** Whether tax on the charge is also reversed (null = not stated). */
+  taxReversed: boolean | null;
+  effectiveFrom?: IsoDate;
+  sourceNote?: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+// ─── Adviser preferences ─────────────────────────────────────────────────────
+
+/** protected = never suggest cutting; essential = ask for context first; fixed = commitments; adjustable = fair game. */
+export type CategoryPreference = 'protected' | 'essential' | 'fixed' | 'adjustable';
+
+export interface AdviserPreference {
+  category: string;
+  preference: CategoryPreference;
   updatedAt: Timestamp;
 }

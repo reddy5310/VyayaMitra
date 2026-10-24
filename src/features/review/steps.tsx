@@ -7,7 +7,8 @@ import type { ExpenseTag, Paise, SavingAction, Transaction } from '@/domain/type
 import type { Insight, MonthReviewData } from '@/engine/analytics';
 import { ROUTES, activityLink, exploreLink } from '@/app/routes';
 import { addMonths, formatDate, formatMonth } from '@/lib/dates';
-import { formatINR } from '@/lib/money';
+import { InsightTextView, MaskedText } from '@/features/overview/InsightText';
+import { rich } from '@/features/overview/mask';
 import { Badge, Button, Card, CardHeader, MeterBar, Money, Notice, useToast } from '@/ui';
 import { categoryName } from '@/domain/categories';
 import { ActionStages } from './stages';
@@ -134,13 +135,17 @@ export function ChangesStep({ data, large, insights }: { data: MonthReviewData; 
     <Step title="Understand what changed" subtitle="What moved, why, and what you already expected.">
       {ch && ch.comparable ? (
         <>
-          <p className="text-base font-medium text-fg">{ch.headline}</p>
+          <p className="text-base font-medium text-fg">
+            <MaskedText text={ch.headline} />
+          </p>
           <ul className="divide-y divide-border">
             {ch.merchants.slice(0, 5).map((m) => (
               <li key={m.merchantKey} className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium text-fg">{m.merchant}</p>
-                  <p className="text-xs text-fg-muted">{m.sentence}</p>
+                  <p className="text-xs text-fg-muted">
+                    <MaskedText text={m.sentence} />
+                  </p>
                   {m.txnIdsCurrent.length > 0 && (
                     <Link to={activityLink({ ids: m.txnIdsCurrent })} className="text-xs font-medium text-primary hover:underline">
                       See {m.txnIdsCurrent.length} {m.txnIdsCurrent.length === 1 ? 'transaction' : 'transactions'}
@@ -157,7 +162,7 @@ export function ChangesStep({ data, large, insights }: { data: MonthReviewData; 
         </>
       ) : (
         <Notice tone="info" title="No fair comparison this month">
-          {ch?.comparison.note ?? 'There is no earlier month with matching statements to compare against, so changes are not explained.'}
+          <MaskedText text={ch?.comparison.note ?? 'There is no earlier month with matching statements to compare against, so changes are not explained.'} />
         </Notice>
       )}
 
@@ -202,8 +207,12 @@ export function ChangesStep({ data, large, insights }: { data: MonthReviewData; 
           <ul className="mt-2 space-y-2">
             {insights.map((i) => (
               <li key={i.id} className="rounded-xl border border-border p-3">
-                <p className="text-sm font-medium text-fg">{i.title}</p>
-                <p className="text-xs text-fg-muted">{i.body}</p>
+                <p className="text-sm font-medium text-fg">
+                  <InsightTextView parts={rich(i).titleParts} fallback={i.title} />
+                </p>
+                <p className="text-xs text-fg-muted">
+                  <InsightTextView parts={rich(i).bodyParts} fallback={i.body} />
+                </p>
                 {data.expectedInsightIds.includes(i.id) ? (
                   <Badge tone="info" className="mt-1">
                     Marked as expected
@@ -211,10 +220,10 @@ export function ChangesStep({ data, large, insights }: { data: MonthReviewData; 
                 ) : (
                   <div className="mt-1 flex flex-wrap gap-2">
                     <Button size="md" variant="secondary" onClick={() => feedback(i, 'expected')}>
-                      Expected<span className="sr-only"> : {i.title}</span>
+                      Expected<span className="sr-only"> : <MaskedText text={i.title} /></span>
                     </Button>
                     <Button size="md" variant="ghost" onClick={() => feedback(i, 'irrelevant')}>
-                      Not relevant<span className="sr-only"> : {i.title}</span>
+                      Not relevant<span className="sr-only"> : <MaskedText text={i.title} /></span>
                     </Button>
                   </div>
                 )}
@@ -276,7 +285,9 @@ export function PlanStep({ data, month }: { data: MonthReviewData; month: string
           <ul className="mt-1 divide-y divide-border">
             {data.actions.map((o) => (
               <li key={o.action.id} className="py-3 first:pt-1 last:pb-0">
-                <p className="text-sm font-medium text-fg">{o.action.title}</p>
+                <p className="text-sm font-medium text-fg">
+                  <MaskedText text={o.action.title} />
+                </p>
                 <ActionStages action={o.action} outcome={o} />
               </li>
             ))}
@@ -307,6 +318,8 @@ function toAction(i: Insight, nextMonth: string): NewAction | null {
     startMonth: nextMonth,
     status: 'active',
     insightId: i.id,
+    scope: { categories: a.category ? [a.category] : undefined, merchantKeys: a.merchantKey ? [a.merchantKey] : undefined },
+    outcomeKind: a.type === 'goal_contribution' ? 'goal_contribution' : 'purchase_reduction',
   };
 }
 
@@ -350,14 +363,18 @@ export function NextStep({
             const done = chosen.some((c) => c.title === (input?.title ?? ''));
             return (
               <li key={i.id} className="rounded-xl border border-border p-3">
-                <p className="text-sm font-semibold text-fg">{i.title}</p>
-                <p className="text-sm text-fg-muted">{i.body}</p>
+                <p className="text-sm font-semibold text-fg">
+                  <InsightTextView parts={rich(i).titleParts} fallback={i.title} />
+                </p>
+                <p className="text-sm text-fg-muted">
+                  <InsightTextView parts={rich(i).bodyParts} fallback={i.body} />
+                </p>
                 {i.estimatedMonthlySaving !== undefined && i.estimatedMonthlySaving > 0 && (
                   <p className="mt-1 text-xs text-fg-muted">
                     <Badge tone="info" className="mr-1">
                       Opportunity
                     </Badge>
-                    Up to {formatINR(i.estimatedMonthlySaving, { whole: true })} a month. Not saved yet.
+                    Up to <Money value={i.estimatedMonthlySaving} whole /> a month. Not saved yet.
                   </p>
                 )}
                 <div className="mt-2">
@@ -365,7 +382,7 @@ export function NextStep({
                     <Badge tone="positive">Planned for {formatMonth(nextMonth)}</Badge>
                   ) : input ? (
                     <Button variant="secondary" loading={busy === i.id} onClick={() => choose(i, input)}>
-                      Plan this adjustment<span className="sr-only"> : {i.title}</span>
+                      Plan this adjustment<span className="sr-only"> : <MaskedText text={i.title} /></span>
                     </Button>
                   ) : (
                     <Link to={`${ROUTES.plan}?tab=budgets`} className={linkClass}>

@@ -11,6 +11,7 @@ import type {
   CustomCategory,
   Direction,
   IsoDate,
+  ChargeType,
   FeedbackEvent,
   KindSource,
   Paise,
@@ -65,6 +66,8 @@ export interface Understanding {
   reasons: string[];
   needsReview: boolean;
   reviewReasons: string[];
+  /** Structured fee subtype for kind 'fee' rows (and their reversals). */
+  chargeType?: ChargeType;
 }
 
 /** Serializable on-device model. Shape is private to the module; persist it as opaque JSON. */

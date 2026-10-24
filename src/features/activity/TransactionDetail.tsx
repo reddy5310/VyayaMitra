@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { CheckCircle2, Link2, RotateCcw, X } from 'lucide-react';
 import { markReviewed, resetTransaction, setTransactionNote } from '@/db/actions';
+import { Link } from 'react-router-dom';
+import { ROUTES } from '@/app/routes';
 import { useLedger, useTransaction } from '@/db/hooks';
 import { useTransactionHistory } from '@/db/review';
 import { CATEGORY_GROUP_LABELS, allCategories, categoryName } from '@/domain/categories';
@@ -319,6 +321,8 @@ function DetailBody({ txn, onOpenTxn }: { txn: Transaction; onOpenTxn: (id: stri
         </>
       )}
 
+      <RelatedLinks txn={txn} />
+
       {/* Source */}
       <SectionTitle>Source (as printed on the statement)</SectionTitle>
       <pre
@@ -380,5 +384,38 @@ function CorrectionPromptFor({ correction, merchant }: { correction: ReturnType<
         onCancel={correction.cancel}
       />
     </div>
+  );
+}
+
+const relatedLink =
+  'inline-flex min-h-touch items-center rounded-xl border border-border-strong px-4 text-sm font-medium text-fg hover:bg-surface-2';
+
+/** Where this transaction connects to refunds and charges. */
+function RelatedLinks({ txn }: { txn: Transaction }) {
+  const isFee = txn.kind === 'fee' || txn.category === 'fees_charges';
+  const isRefundLike = txn.direction === 'credit' && (txn.kind === 'refund' || txn.kind === 'reversal' || txn.category === 'refunds');
+  const canTrack = txn.direction === 'debit' && !isFee;
+  if (!isFee && !isRefundLike && !canTrack) return null;
+  return (
+    <>
+      <SectionTitle>Money back and charges</SectionTitle>
+      <div className="flex flex-wrap gap-2">
+        {canTrack && (
+          <Link to={`${ROUTES.moneyBack}?track=${encodeURIComponent(txn.id)}`} className={relatedLink}>
+            Track expected refund
+          </Link>
+        )}
+        {isRefundLike && (
+          <Link to={`${ROUTES.moneyBack}?match=${encodeURIComponent(txn.id)}`} className={relatedLink}>
+            Match this credit
+          </Link>
+        )}
+        {isFee && (
+          <Link to={`${ROUTES.fees}?txn=${encodeURIComponent(txn.id)}`} className={relatedLink}>
+            See this charge group
+          </Link>
+        )}
+      </div>
+    </>
   );
 }
