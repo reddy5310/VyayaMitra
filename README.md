@@ -146,4 +146,4 @@ Issues and pull requests are welcome at <https://github.com/reddy5310/VyayaMitra
 
 ## Licence
 
-The source is public on GitHub. No licence file has been added yet, so until one is, all rights are reserved by the author.
+[MIT](LICENSE).

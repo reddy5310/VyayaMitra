@@ -1,6 +1,7 @@
 {
   "name": "vyayamitra",
   "private": true,
+  "license": "MIT",
   "version": "1.0.0",
   "description": "VyayaMitra - a private, on-device spending and savings companion for Indian bank and credit-card statements.",
   "type": "module",
