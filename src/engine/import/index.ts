@@ -270,6 +270,18 @@ export async function prepareImport(file: StatementFile, opts: PrepareOptions = 
   );
 }
 
+/**
+ * Stage an already-parsed statement (no file to read). Used by sample data so synthetic statements
+ * go through exactly the same understand → dedupe → commit path as real ones. Writes nothing.
+ */
+export async function stageParsed(
+  file: ImportPreview['file'],
+  parsed: ParsedStatement,
+  target?: { accountId: string } | { newAccount: NewAccountInput },
+): Promise<ImportPreview> {
+  return stage(file, parsed, target);
+}
+
 /** Analyse a file's structure for the "teach this format" screen. Writes nothing. */
 export async function inspectImport(
   file: StatementFile,

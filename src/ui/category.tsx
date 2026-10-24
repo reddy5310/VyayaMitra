@@ -76,9 +76,10 @@ const ICONS: Record<string, LucideIcon> = {
   Wifi,
 };
 
-/** CSS colour for chart palette slot 1..10, theme-aware via tokens. */
+/** CSS colour for a category colour slot: 1..24 → --chart-N, 0 → neutral. Theme-aware via tokens. */
 export function chartColor(index: number): string {
-  const slot = ((Math.max(1, index) - 1) % 10) + 1;
+  if (index <= 0) return 'rgb(var(--chart-neutral))';
+  const slot = ((index - 1) % 24) + 1;
   return `rgb(var(--chart-${slot}))`;
 }
 

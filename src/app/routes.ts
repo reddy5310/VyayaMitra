@@ -7,7 +7,22 @@ export const ROUTES = {
   settings: '/settings',
   report: '/report',
   learning: '/learning',
+  explore: '/explore',
+  accounts: '/accounts',
 } as const;
+
+/** Account detail: '/accounts/<id>' (credit cards show statement cycles). */
+export function accountLink(id: string): string {
+  return `${ROUTES.accounts}/${encodeURIComponent(id)}`;
+}
+
+/** Explore sections: '/explore?view=categories|trends|compare|merchants|patterns|flow'. */
+export type ExploreView = 'categories' | 'trends' | 'compare' | 'merchants' | 'patterns' | 'flow';
+export function exploreLink(view: ExploreView, params: { category?: string } = {}): string {
+  const sp = new URLSearchParams({ view });
+  if (params.category) sp.set('category', params.category);
+  return `${ROUTES.explore}?${sp.toString()}`;
+}
 
 /**
  * Activity deep-link query params (all optional):

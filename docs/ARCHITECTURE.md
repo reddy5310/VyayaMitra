@@ -99,14 +99,16 @@ Browser-side preferences that are not part of the ledger live in `localStorage`:
 
 - **Providers** (`src/app/App.tsx`): Theme, Toast, Install, PWA, Privacy (from `AppSettings.hideAmounts`), Period, then the `HashRouter`. Hash routing is used so GitHub Pages needs no rewrite rules.
 - **Screens are lazy-loaded** with `React.lazy`, each wrapped in a `Suspense` fallback and its own error boundary that resets when the route changes. A broken screen never blanks the shell.
-- **Layout** (`Shell.tsx`): below `md` a top app bar plus bottom tab bar (Import is the raised centre action); from `md` a sidebar. Skip link, `aria-current` on the active item, safe-area padding.
+- **Layout** (`Shell.tsx`): five destinations (Overview, Explore, Activity, Plan, Accounts). Below `md` a bottom tab bar, `md` to `lg` a navigation rail, `lg`+ a sidebar that also carries Import, Learning and Settings. Import is an action (header button, rail and sidebar), Settings a gear. Skip link, `aria-current`, safe-area padding. `SampleBanner` (from `src/db`) sits in the sticky header while sample data is on.
 - **Page chrome** (`chrome.tsx`): screens declare `usePageChrome({ title, showPeriod, actions })` and the shell renders the header.
 - **Period** (`period.tsx`): one shared period for every screen, defaulting to the month of the latest transaction, persisted per device.
 - **PWA** (`pwa.tsx`, `PwaRegistrar.tsx`, `vite.config.ts`): `registerType: 'prompt'`. A waiting version produces a banner, never an automatic reload. Registration happens only in production builds. Workbox precaches JS (including the `.mjs` PDF worker), CSS, HTML, SVG and PNG, with `index.html` as navigation fallback.
 
+- **Back and scroll** (`src/ui/backClose.ts`, `src/app/scroll.ts`): every `Sheet` pushes one history entry while open so the Back gesture closes it; the shell stores each route's scroll offset in `sessionStorage` and restores it on Back/Forward.
+
 ## Design system
 
-Colours are CSS variables holding `R G B` channels (`src/index.css`), exposed to Tailwind with alpha support (`bg-primary/10`). Light is the default; `[data-theme="dark"]` overrides the tokens. `index.html` applies the stored theme before first paint to avoid a flash. Text and background pairs meet 4.5:1 in both themes, and form-control outlines meet 3:1. Touch targets are at least 44 px (`min-h-touch`); dense controls shrink only on fine pointers (`coarse:` variant). Motion is reduced under `prefers-reduced-motion`.
+The look is calm and personal: warm light neutrals (deep neutral in dark), one teal accent, tabular numerals, status always colour plus icon or text. Category colours are 24 fixed slots (`--chart-1..24`, `--chart-neutral`) that avoid the status hues. `ChartFrame` wraps every chart (question, scope, takeaway, completeness marker, table alternative); `MeterBar` and `ProgressRing` show budgets and goals accessibly. Colours are CSS variables holding `R G B` channels (`src/index.css`), exposed to Tailwind with alpha support (`bg-primary/10`). Light is the default; `[data-theme="dark"]` overrides the tokens. `index.html` applies the stored theme before first paint to avoid a flash. Text and background pairs meet 4.5:1 in both themes, and form-control outlines meet 3:1. Touch targets are at least 44 px (`min-h-touch`); dense controls shrink only on fine pointers (`coarse:` variant). Motion is reduced under `prefers-reduced-motion`.
 
 ## Testing
 

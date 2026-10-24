@@ -23,7 +23,8 @@ This is the whole point of the project, so it is stated plainly.
 - A reconciliation check on every statement: do the running balances and printed totals add up? Each statement is labelled *balanced*, *mismatch* or *unverified*.
 - Automatic understanding of each transaction (merchant, category, what kind of money movement it is) with reasons you can read, and a "needs review" queue for anything uncertain.
 - Corrections you can remember as rules, and undo by deleting the rule.
-- Overview, Activity (search, filters, deep links), Plan (budgets, goals, recurring payments, saving actions) and printable reports, all driven by one shared reporting period.
+- Five destinations: **Overview** (can I trust the data, and what changed), **Explore** (where the money went), **Activity** (every transaction), **Plan** (budgets, goals, recurring) and **Accounts** (accounts, statements and coverage). **Import** is an action available from every screen; **Settings** and the **Learning centre** sit behind the gear and the sidebar. Everything shows the date your statements run through, and all screens share one reporting period.
+- Navigation adapts: bottom tabs on phones, a slim rail on tablets, a full sidebar on desktop. The Back button closes sheets first, and lists remember where you were.
 - Hide amounts (blurred until you turn it off), light, dark and system themes.
 - Encrypted backup and restore (replace or merge).
 

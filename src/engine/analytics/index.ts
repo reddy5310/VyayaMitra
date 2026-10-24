@@ -318,6 +318,7 @@ export { budgetStatuses, categoryBaselines } from './budgets';
 export { goalProgress } from './goals';
 export { generateInsights } from './insights';
 export { evaluateSavingActions } from './actions';
+export { dataStatus, spendingPlan, cumulativeSpending, compareSpending, spendingCalendar, merchantPareto, moneyFlow, coverageGrid, cardCycles } from './review';
 
 // ─── Wave 2: learning metrics & card dues ────────────────────────────────────
 
@@ -349,3 +350,121 @@ export interface CardDue {
 }
 
 /** Latest statement per credit-card account with a printed due date. */
+
+// ─── Wave 5: guided-review analytics (contracts) ─────────────────────────────
+
+/** What the ledger can honestly support right now — drives an Overview that adapts to the evidence. */
+export interface DataStatus {
+  /** Latest date covered by any statement (the "data through" boundary). */
+  dataThrough: IsoDate | null;
+  accountCount: number;
+  statementCount: number;
+  needsReview: number;
+  /** Rows whose AMOUNT/DIRECTION is uncertain (balance breaks, ambiguous amounts) — distinct from category uncertainty. */
+  extractionIssues: number;
+  evidence: 'none' | 'cards_only' | 'bank_only' | 'bank_and_card';
+  /** Calendar months fully covered for every tracked account, oldest first. */
+  completeMonths: MonthKey[];
+  latestCompleteMonth: MonthKey | null;
+}
+
+/** The user's spending plan = sum of monthly budgets (null when there are none). */
+
+export interface CumulativePoint {
+  date: IsoDate;
+  /** Cumulative recorded spending; null on days not covered by statements (never drawn as zero). */
+  actual: Paise | null;
+  /** Even-pace plan line for the day, when a plan exists. */
+  plan?: Paise;
+  /** Projection only after the last covered day, only when justified (see projectionNote). */
+  projected?: Paise;
+  covered: boolean;
+}
+export interface CumulativeSeries {
+  points: CumulativePoint[];
+  total: Paise;
+  planTotal?: Paise;
+  projectedTotal?: Paise;
+  projectionNote?: string;
+  dataThrough: IsoDate | null;
+}
+
+export interface WaterfallStep {
+  key: string;
+  label: string;
+  category?: string;
+  /** current − previous (positive = spent more). */
+  delta: Paise;
+  txnIdsCurrent: string[];
+  txnIdsPrevious: string[];
+}
+export interface SpendingComparison {
+  current: { start: IsoDate; end: IsoDate; label: string; total: Paise };
+  previous: { start: IsoDate; end: IsoDate; label: string; total: Paise };
+  /** Largest contributors first; the remainder is folded into `other`. */
+  steps: WaterfallStep[];
+  other: Paise;
+  /** e.g. "Comparing September with August (both fully covered)". */
+  basis: string;
+  /** false when either period is not fully covered — the UI must say so and not explain a "change". */
+  comparable: boolean;
+  note?: string;
+}
+
+export interface HeatDay {
+  date: IsoDate;
+  amount: Paise;
+  count: number;
+  /** false = no statement covers this day: render differently from a verified zero-spend day. */
+  covered: boolean;
+}
+
+export interface ParetoRow extends MerchantStat {
+  /** Share of total spending covered by this merchant and all ranked above it, 0..1. */
+  cumulativeShare: number;
+}
+
+export interface FlowNode {
+  id: string;
+  label: string;
+  kind: 'income' | 'people_in' | 'account' | 'spending_group' | 'saving' | 'people_out' | 'card' | 'unexplained';
+}
+export interface FlowLink {
+  from: string;
+  to: string;
+  amount: Paise;
+}
+/**
+ * 'spending'  — recorded inflows → accounts → spending groups / saving / people (card repayments never appear as spending);
+ * 'transfers' — movements between the user's own accounts and card repayments only.
+ */
+
+export interface CoverageCell {
+  accountId: string;
+  month: MonthKey;
+  state: 'full' | 'partial' | 'missing' | 'before_tracking';
+  coveredDays: number;
+  totalDays: number;
+  statementIds: string[];
+}
+
+export interface CardCycle {
+  statementId: string;
+  periodStart?: IsoDate;
+  periodEnd?: IsoDate;
+  statementDate?: IsoDate;
+  dueDate?: IsoDate;
+  totalDue?: Paise;
+  minimumDue?: Paise;
+  previousBalance?: Paise;
+  purchases: Paise;
+  refunds: Paise;
+  fees: Paise;
+  interest: Paise;
+  payments: Paise;
+  /** Bank-side debits linked to this card's payment credits after the statement date. */
+  matchedRepayments: { txnId: string; amount: Paise; date: IsoDate; fromAccountId?: string }[];
+  /** 'unknown' when no later statement or bank leg confirms payment. */
+  paymentStatus: 'paid' | 'partly_paid' | 'unpaid' | 'unknown';
+  txnIds: string[];
+}

@@ -1,84 +1,113 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
-import { Download, Eye, EyeOff, FileUp, LayoutDashboard, Lock, ReceiptText, Settings, Target, type LucideIcon } from 'lucide-react';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
+import {
+  Compass,
+  Download,
+  Eye,
+  EyeOff,
+  FileUp,
+  Landmark,
+  LayoutDashboard,
+  Lock,
+  ReceiptText,
+  Settings,
+  Sparkles,
+  Target,
+  type LucideIcon,
+} from 'lucide-react';
+import { SampleBanner } from '@/db/sampleBanner';
 import { Button, IconButton, cn, usePrivacy, useToast } from '@/ui';
 import { PageChromeProvider, useChromeConfig } from './chrome';
 import { useInstall } from './install';
 import { PeriodPicker } from './period';
 import { UpdateBanner } from './pwa';
 import { ROUTES } from './routes';
+import { useScrollMemory } from './scroll';
 
 interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
   end?: boolean;
-  /** The centre action on phones. */
-  prominent?: boolean;
 }
 
+/** The five destinations. Import and Settings are actions, not destinations. */
 const NAV_ITEMS: NavItem[] = [
   { to: ROUTES.overview, label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: ROUTES.explore, label: 'Explore', icon: Compass },
   { to: ROUTES.activity, label: 'Activity', icon: ReceiptText },
-  { to: ROUTES.import, label: 'Import', icon: FileUp, prominent: true },
   { to: ROUTES.plan, label: 'Plan', icon: Target },
-  { to: ROUTES.settings, label: 'Settings', icon: Settings },
+  { to: ROUTES.accounts, label: 'Accounts', icon: Landmark },
 ];
+
+const IMPORT_ITEM: NavItem = { to: ROUTES.import, label: 'Import', icon: FileUp };
+const LEARNING_ITEM: NavItem = { to: ROUTES.learning, label: 'Learning', icon: Sparkles };
+const SETTINGS_ITEM: NavItem = { to: ROUTES.settings, label: 'Settings', icon: Settings };
 
 const ROUTE_TITLES: Record<string, string> = {
   [ROUTES.overview]: 'Overview',
+  [ROUTES.explore]: 'Explore',
   [ROUTES.activity]: 'Activity',
   [ROUTES.import]: 'Import statements',
   [ROUTES.plan]: 'Plan',
+  [ROUTES.accounts]: 'Accounts',
   [ROUTES.settings]: 'Settings',
+  [ROUTES.learning]: 'Learning centre',
   [ROUTES.report]: 'Report',
 };
 
 const BASE = import.meta.env.BASE_URL;
 
-function Brand({ className }: { className?: string }) {
+function Brand({ className, compact }: { className?: string; compact?: boolean }) {
   return (
     <div className={cn('flex items-center gap-2.5', className)}>
       <img src={`${BASE}logo.svg`} alt="" width={36} height={36} className="h-9 w-9 rounded-xl" />
-      <span className="text-lg font-semibold tracking-tight text-fg">VyayaMitra</span>
+      {!compact && <span className="text-lg font-semibold tracking-tight text-fg">VyayaMitra</span>}
     </div>
   );
 }
 
-function SidebarNav() {
+/** Desktop (lg+): full sidebar with destinations, then Import and the secondary links. */
+function Sidebar() {
   const { canInstall, promptInstall } = useInstall();
+  const link = ({ isActive }: { isActive: boolean }) =>
+    cn(
+      'flex min-h-touch items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors',
+      isActive ? 'bg-primary-soft text-primary' : 'text-fg-muted hover:bg-surface-2 hover:text-fg',
+    );
   return (
-    <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-surface px-3 py-5 md:flex print:hidden">
-      <Brand className="px-3 pb-6" />
-      <nav aria-label="Primary" className="flex flex-1 flex-col gap-1">
-        {NAV_ITEMS.map(({ to, label, icon: Icon, end, prominent }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn(
-                'flex min-h-touch items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors',
-                prominent && !isActive && 'my-1 bg-primary text-primary-fg shadow-card hover:bg-primary/90',
-                isActive
-                  ? prominent
-                    ? 'my-1 bg-primary text-primary-fg shadow-card'
-                    : 'bg-primary-soft text-primary'
-                  : !prominent && 'text-fg-muted hover:bg-surface-2 hover:text-fg',
-              )
-            }
-          >
+    <aside data-nav="sidebar" className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-border bg-surface px-3 py-5 lg:flex print:hidden">
+      <Brand className="px-3 pb-5" />
+      <Link
+        to={IMPORT_ITEM.to}
+        data-action="import"
+        className="mb-4 flex min-h-touch items-center justify-center gap-2 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-fg shadow-card transition-colors hover:bg-primary/90"
+      >
+        <FileUp className="h-5 w-5" aria-hidden />
+        Import statement
+      </Link>
+      <nav aria-label="Primary" className="flex flex-col gap-1">
+        {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={link}>
+            <Icon className="h-5 w-5" aria-hidden />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      <nav aria-label="More" className="mt-auto flex flex-col gap-1 border-t border-border pt-3">
+        {[LEARNING_ITEM, SETTINGS_ITEM].map(({ to, label, icon: Icon }) => (
+          <NavLink key={to} to={to} className={link}>
             <Icon className="h-5 w-5" aria-hidden />
             {label}
           </NavLink>
         ))}
       </nav>
       {canInstall && (
-        <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" aria-hidden />} onClick={() => void promptInstall()} className="mb-3">
+        <Button variant="outline" size="sm" icon={<Download className="h-4 w-4" aria-hidden />} onClick={() => void promptInstall()} className="mt-3">
           Install app
         </Button>
       )}
-      <div className="rounded-xl bg-surface-2 p-3 text-xs text-fg-muted">
+      <div className="mt-3 rounded-xl bg-surface-2 p-3 text-xs text-fg-muted">
         <p className="flex items-center gap-1.5 font-semibold text-fg">
           <Lock className="h-3.5 w-3.5 text-primary" aria-hidden />
           Private
@@ -89,42 +118,71 @@ function SidebarNav() {
   );
 }
 
+function RailBody({ icon: Icon, label, isActive }: { icon: LucideIcon; label: string; isActive: boolean }) {
+  return (
+    <>
+      <span className={cn('flex h-8 w-12 items-center justify-center rounded-full transition-colors', isActive && 'bg-primary-soft')}>
+        <Icon className="h-5 w-5" aria-hidden />
+      </span>
+      {label}
+    </>
+  );
+}
+
+/** Tablet (md to lg): a narrow navigation rail, icons with short labels. */
+function Rail() {
+  const item = ({ isActive }: { isActive: boolean }) =>
+    cn(
+      'flex min-h-touch w-full flex-col items-center justify-center gap-0.5 rounded-xl px-1 py-2 text-[11px] font-medium transition-colors',
+      isActive ? 'text-primary' : 'text-fg-muted hover:text-fg',
+    );
+  return (
+    <aside data-nav="rail" className="fixed inset-y-0 left-0 z-30 hidden w-20 flex-col items-center border-r border-border bg-surface px-1.5 py-4 md:flex lg:hidden print:hidden">
+      <Brand compact className="pb-4" />
+      <nav aria-label="Primary" className="flex w-full flex-1 flex-col gap-1">
+        {NAV_ITEMS.map(({ to, label, icon, end }) => (
+          <NavLink key={to} to={to} end={end} className={item}>
+            {({ isActive }) => <RailBody icon={icon} label={label} isActive={isActive} />}
+          </NavLink>
+        ))}
+      </nav>
+      <nav aria-label="More" className="flex w-full flex-col gap-1 border-t border-border pt-2">
+        {[IMPORT_ITEM, SETTINGS_ITEM].map(({ to, label, icon }) => (
+          <NavLink key={to} to={to} data-action={to === ROUTES.import ? 'import' : undefined} className={item}>
+            {({ isActive }) => <RailBody icon={icon} label={label} isActive={isActive} />}
+          </NavLink>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+
+/** Phones (below md): bottom navigation with the five destinations. */
 function BottomTabs() {
   return (
     <nav
+      data-nav="bottom"
       aria-label="Primary"
       className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-surface/95 pb-safe pl-safe pr-safe backdrop-blur md:hidden print:hidden"
     >
-      <ul className="mx-auto grid max-w-lg grid-cols-5 items-end">
-        {NAV_ITEMS.map(({ to, label, icon: Icon, end, prominent }) => (
-          <li key={to} className="flex justify-center">
+      <ul className="mx-auto grid max-w-lg grid-cols-5">
+        {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
+          <li key={to}>
             <NavLink
               to={to}
               end={end}
               className={({ isActive }) =>
                 cn(
-                  'flex min-h-16 w-full flex-col items-center justify-center gap-0.5 px-1 text-xs font-medium transition-colors',
+                  'flex min-h-16 w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[11px] font-medium transition-colors',
                   isActive ? 'text-primary' : 'text-fg-muted',
-                  prominent && 'relative -mt-4',
                 )
               }
             >
               {({ isActive }) => (
                 <>
-                  {prominent ? (
-                    <span
-                      className={cn(
-                        'flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-fg shadow-raised ring-4 ring-surface',
-                        isActive && 'ring-primary-soft',
-                      )}
-                    >
-                      <Icon className="h-6 w-6" aria-hidden />
-                    </span>
-                  ) : (
-                    <span className={cn('flex h-8 w-14 items-center justify-center rounded-full transition-colors', isActive && 'bg-primary-soft')}>
-                      <Icon className="h-5 w-5" aria-hidden />
-                    </span>
-                  )}
+                  <span className={cn('flex h-8 w-14 items-center justify-center rounded-full transition-colors', isActive && 'bg-primary-soft')}>
+                    <Icon className="h-5 w-5" aria-hidden />
+                  </span>
                   <span>{label}</span>
                 </>
               )}
@@ -133,6 +191,35 @@ function BottomTabs() {
         ))}
       </ul>
     </nav>
+  );
+}
+
+/** The Import action in the header (phones and tablets; the sidebar carries its own on desktop). */
+function ImportAction() {
+  return (
+    <Link
+      to={IMPORT_ITEM.to}
+      data-action="import"
+      aria-label="Import statement"
+      className="inline-flex min-h-touch min-w-touch items-center justify-center gap-2 rounded-xl bg-primary px-3 text-sm font-semibold text-primary-fg shadow-card transition-colors hover:bg-primary/90 lg:hidden"
+    >
+      <FileUp className="h-5 w-5" aria-hidden />
+      <span className="hidden sm:inline">Import</span>
+    </Link>
+  );
+}
+
+/** Settings gear for phones; the rail and sidebar carry it from md up. */
+function SettingsAction() {
+  return (
+    <Link
+      to={SETTINGS_ITEM.to}
+      data-action="settings"
+      aria-label="Settings"
+      className="inline-flex min-h-touch min-w-touch items-center justify-center rounded-xl text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg md:hidden"
+    >
+      <Settings className="h-5 w-5" aria-hidden />
+    </Link>
   );
 }
 
@@ -186,6 +273,8 @@ function Header({ fallbackTitle }: { fallbackTitle: string }) {
         <div className="flex items-center gap-1 print:hidden md:order-2">
           {chrome?.actions}
           <HideAmountsToggle />
+          <SettingsAction />
+          <ImportAction />
         </div>
         {chrome?.showPeriod && (
           <div className="order-last basis-full pb-1 print:hidden md:order-1 md:basis-auto md:pb-0">
@@ -193,6 +282,8 @@ function Header({ fallbackTitle }: { fallbackTitle: string }) {
           </div>
         )}
       </div>
+      {/* Always visible while sample data is on (the header is sticky on phones). */}
+      <SampleBanner />
       <UpdateBanner />
     </header>
   );
@@ -210,10 +301,8 @@ function ShellFrame() {
   const { pathname } = useLocation();
   const mainRef = useRef<HTMLElement>(null);
 
-  // New screen: start at the top (HashRouter does not do this itself).
-  useEffect(() => {
-    window.scrollTo?.(0, 0);
-  }, [pathname]);
+  // New screen: top of page; returning with Back: where the person was.
+  useScrollMemory();
 
   const skip = (e: MouseEvent<HTMLAnchorElement>) => {
     // A plain "#main" href would be swallowed by the hash router, so focus the target manually.
@@ -221,6 +310,8 @@ function ShellFrame() {
     mainRef.current?.focus();
     mainRef.current?.scrollIntoView?.();
   };
+
+  const fallback = ROUTE_TITLES[pathname] ?? (pathname.startsWith(`${ROUTES.accounts}/`) ? 'Account' : 'VyayaMitra');
 
   return (
     <div className="min-h-dvh">
@@ -231,9 +322,10 @@ function ShellFrame() {
       >
         Skip to content
       </a>
-      <SidebarNav />
-      <div className="md:pl-64 print:pl-0">
-        <Header fallbackTitle={ROUTE_TITLES[pathname] ?? 'VyayaMitra'} />
+      <Sidebar />
+      <Rail />
+      <div className="md:pl-20 lg:pl-64 print:pl-0">
+        <Header fallbackTitle={fallback} />
         <main
           id="main"
           ref={mainRef}

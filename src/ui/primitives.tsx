@@ -14,6 +14,7 @@ import {
   type TextareaHTMLAttributes,
 } from 'react';
 import { Loader2, X } from 'lucide-react';
+import { useBackClose } from './backClose';
 
 export function cn(...inputs: ClassValue[]): string {
   return clsx(inputs);
@@ -287,6 +288,7 @@ export function Sheet({
   const titleId = useId();
   const openRef = useRef(open);
   openRef.current = open;
+  useBackClose(open, onClose);
 
   useEffect(() => {
     const el = ref.current;

@@ -1,20 +1,25 @@
 import { useCallback, useMemo, useState } from 'react';
 import { CheckCircle2, SkipForward, Sparkles } from 'lucide-react';
-import { markReviewed, type CorrectionScope } from '@/db/actions';
+import { markReviewed } from '@/db/actions';
 import { categoryName } from '@/domain/categories';
 import { KIND_LABELS } from '@/domain/kinds';
 import type { CustomCategory, Transaction } from '@/domain/types';
 import { reviewPriority, type CategorySuggestion, type ReviewItem } from '@/engine/understand';
 import { formatDate } from '@/lib/dates';
-import { Badge, Button, Card, CategoryIcon, EmptyState, Money, ProgressBar, useToast } from '@/ui';
+import { Badge, Button, Card, CategoryIcon, EmptyState, Money, Notice, ProgressBar, SegmentedControl, useToast } from '@/ui';
 import { CorrectionPrompt } from './CorrectionPrompt';
 import { categorySourceLabel, percentText } from './labels';
 import { popularCategories } from './popularCategories';
+import { groupKey, isExtractionIssue } from './reviewKinds';
 import { errorMessage, useCorrection, type PendingChange } from './useCorrection';
 
 interface QueueEntry {
   txn: Transaction;
   item?: ReviewItem;
+}
+interface Group {
+  key: string;
+  entries: QueueEntry[];
 }
 
 /** Highest-impact first: teaching one merchant fixes the most rows and money. */
@@ -35,10 +40,28 @@ function orderQueue(txns: readonly Transaction[]): QueueEntry[] {
   return entries;
 }
 
+function groupEntries(entries: readonly QueueEntry[]): Group[] {
+  const groups: Group[] = [];
+  const index = new Map<string, Group>();
+  for (const e of entries) {
+    const key = groupKey(e.txn);
+    let g = index.get(key);
+    if (!g) {
+      g = { key, entries: [] };
+      index.set(key, g);
+      groups.push(g);
+    }
+    g.entries.push(e);
+  }
+  return groups;
+}
+
+type Tab = 'amounts' | 'categories';
+
 /**
- * One transaction at a time. Skipped items are remembered locally and reappear only after a reload;
- * reviewed or recategorised items leave the queue because the data is reactive. After an answer applied to
- * a whole merchant, the other rows of that merchant are moved past as well.
+ * Two different questions, kept apart: "is this amount read correctly?" (extraction problems) and
+ * "is this the right category?" (decisions, asked once per merchant or UPI id for all its rows).
+ * Skipped items are remembered locally and reappear after a reload; answered rows leave because the data is reactive.
  */
 export function ReviewQueue({
   txns,
@@ -58,26 +81,20 @@ export function ReviewQueue({
   onOpen: (id: string) => void;
   onExit: () => void;
 }) {
+  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(new Set());
-  const [advanced, setAdvanced] = useState<ReadonlySet<string>>(new Set());
   const [total] = useState(txns.length);
   const ordered = useMemo(() => orderQueue(txns), [txns]);
-  const queue = useMemo(() => ordered.filter((e) => !skipped.has(e.txn.id) && !advanced.has(e.txn.id)), [ordered, skipped, advanced]);
-  const current = queue[0];
+  const open = useMemo(() => ordered.filter((e) => !hidden.has(e.txn.id) && !skipped.has(e.txn.id)), [ordered, hidden, skipped]);
+  const amountEntries = useMemo(() => open.filter((e) => isExtractionIssue(e.txn)), [open]);
+  const groups = useMemo(() => groupEntries(open.filter((e) => !isExtractionIssue(e.txn))), [open]);
+  const [tab, setTab] = useState<Tab>(() => (ordered.some((e) => isExtractionIssue(e.txn)) ? 'amounts' : 'categories'));
+  const active: Tab = tab === 'amounts' ? (amountEntries.length > 0 || groups.length === 0 ? 'amounts' : 'categories') : groups.length > 0 || amountEntries.length === 0 ? 'categories' : 'amounts';
 
-  const onAnswered = useCallback(
-    (answered: Transaction, scope: CorrectionScope) => {
-      if (scope !== 'merchant') return;
-      setAdvanced((prev) => {
-        const next = new Set(prev);
-        for (const t of txns) if (t.merchantKey === answered.merchantKey) next.add(t.id);
-        return next;
-      });
-    },
-    [txns],
-  );
+  const hide = useCallback((ids: readonly string[]) => setHidden((prev) => new Set([...prev, ...ids])), []);
+  const skip = useCallback((ids: readonly string[]) => setSkipped((prev) => new Set([...prev, ...ids])), []);
 
-  if (!current) {
+  if (open.length === 0) {
     return (
       <Card>
         <EmptyState
@@ -103,73 +120,182 @@ export function ReviewQueue({
     );
   }
 
-  const done = Math.max(0, total - queue.length);
+  const done = Math.max(0, total - open.length);
+  const group = groups[0];
+  const amount = amountEntries[0];
   return (
-    <ReviewCard
-      key={current.txn.id}
-      txn={current.txn}
-      item={current.item}
-      remaining={queue.length}
-      progress={total ? done / total : 0}
-      allTxns={allTxns}
-      accountName={accountNames.get(current.txn.accountId) ?? 'Account'}
-      customCategories={customCategories}
-      suggestions={suggest(current.txn)}
-      onSkip={() => setSkipped((s) => new Set(s).add(current.txn.id))}
-      onAnswered={onAnswered}
-      onOpen={onOpen}
-    />
+    <div className="space-y-3">
+      <div>
+        <div className="mb-1 flex items-center justify-between text-xs text-fg-muted">
+          <span>{open.length} left to review</span>
+        </div>
+        <ProgressBar value={total ? done / total : 0} label="Review progress" />
+      </div>
+
+      {amountEntries.length > 0 && groups.length > 0 && (
+        <SegmentedControl<Tab>
+          label="What to review"
+          value={active}
+          onChange={setTab}
+          options={[
+            { value: 'amounts', label: `Check these amounts (${amountEntries.length})` },
+            { value: 'categories', label: `Confirm categories (${groups.length})` },
+          ]}
+        />
+      )}
+
+      {active === 'amounts' && amount ? (
+        <AmountCard
+          key={amount.txn.id}
+          txn={amount.txn}
+          accountName={accountNames.get(amount.txn.accountId) ?? 'Account'}
+          customCategories={customCategories}
+          onSkip={() => skip([amount.txn.id])}
+          onOpen={onOpen}
+        />
+      ) : group ? (
+        <GroupCard
+          key={group.key}
+          rows={group.entries.map((e) => e.txn)}
+          item={group.entries[0].item}
+          allTxns={allTxns}
+          accountNames={accountNames}
+          customCategories={customCategories}
+          suggestions={suggest(group.entries[0].txn)}
+          onSkip={(ids) => skip(ids)}
+          onAnswered={hide}
+          onOpen={onOpen}
+        />
+      ) : null}
+    </div>
   );
 }
 
-function ReviewCard({
+/** An amount, direction or date that may be misread: show the statement's own text next to it. */
+function AmountCard({
   txn,
-  item,
-  remaining,
-  progress,
-  allTxns,
   accountName,
+  customCategories,
+  onSkip,
+  onOpen,
+}: {
+  txn: Transaction;
+  accountName: string;
+  customCategories: readonly CustomCategory[];
+  onSkip: () => void;
+  onOpen: (id: string) => void;
+}) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  async function confirm() {
+    setBusy(true);
+    try {
+      await markReviewed([txn.id]);
+      toast('Amount confirmed', { tone: 'success' });
+    } catch (e) {
+      toast(errorMessage(e), { tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Card role="region" aria-label="Check this amount" className="space-y-4">
+      <div className="flex items-start gap-3">
+        <CategoryIcon category={txn.category} custom={customCategories} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-base font-semibold text-fg">{txn.merchant}</p>
+          <p className="text-sm text-fg-muted">
+            {formatDate(txn.date)} · {accountName} · page {txn.source.page}
+          </p>
+        </div>
+        <Money value={txn.amount} direction={txn.direction} tone="direction" className="text-lg font-semibold" />
+      </div>
+      <Notice tone="warning" title="This amount may be misread">
+        <ul className="list-disc pl-4">
+          {txn.reviewReasons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      </Notice>
+      <div>
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">As printed on the statement</p>
+        <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-xl bg-surface-2 p-3 font-mono text-xs text-fg">
+          {txn.source.rawLines.join('\n') || txn.rawDescription}
+        </pre>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button className="flex-1" loading={busy} icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} onClick={confirm}>
+          Amount is correct
+        </Button>
+        <Button variant="outline" icon={<SkipForward className="h-4 w-4" aria-hidden />} onClick={onSkip}>
+          Skip
+        </Button>
+        <Button variant="ghost" onClick={() => onOpen(txn.id)}>
+          More options
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
+const PREVIEW_ROWS = 6;
+
+/** One decision for one merchant or UPI id, with a preview of every row it would touch. */
+function GroupCard({
+  rows,
+  item,
+  allTxns,
+  accountNames,
   customCategories,
   suggestions,
   onSkip,
   onAnswered,
   onOpen,
 }: {
-  txn: Transaction;
+  rows: Transaction[];
   item?: ReviewItem;
-  remaining: number;
-  progress: number;
   allTxns: readonly Transaction[];
-  accountName: string;
+  accountNames: ReadonlyMap<string, string>;
   customCategories: readonly CustomCategory[];
   suggestions: CategorySuggestion[];
-  onSkip: () => void;
-  onAnswered: (txn: Transaction, scope: CorrectionScope) => void;
+  onSkip: (ids: string[]) => void;
+  onAnswered: (ids: string[]) => void;
   onOpen: (id: string) => void;
 }) {
   const { toast } = useToast();
+  const lead = rows[0];
   const [busy, setBusy] = useState(false);
-  // A deliberate category choice is a review decision too, so the item leaves the queue.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(rows.map((r) => r.id)));
+  const [showAll, setShowAll] = useState(false);
+  const selectedIds = rows.filter((r) => selected.has(r.id)).map((r) => r.id);
+
+  // A deliberate answer is also a review decision, so the affected rows leave the queue.
   const afterApplied = useCallback(
-    async (change: PendingChange, scope: CorrectionScope) => {
-      if (change.type === 'category' || change.type === 'kind') await markReviewed([txn.id]);
-      onAnswered(txn, scope);
+    async (change: PendingChange, scope: 'this' | 'merchant' | 'selected', ids?: string[]) => {
+      const affected = scope === 'selected' ? (ids ?? []) : scope === 'merchant' ? rows.map((r) => r.id) : [lead.id];
+      if (change.type === 'category' || change.type === 'kind') await markReviewed(affected);
+      onAnswered(affected);
     },
-    [txn, onAnswered],
+    [rows, lead.id, onAnswered],
   );
-  const correction = useCorrection(txn, allTxns, afterApplied);
+  const correction = useCorrection(lead, allTxns, afterApplied);
   const suggestedIds = useMemo(() => new Set(suggestions.map((s) => s.category)), [suggestions]);
-  const others = useMemo(() => popularCategories(txn, allTxns, 8).filter((id) => !suggestedIds.has(id)).slice(0, 5), [txn, allTxns, suggestedIds]);
-  const alsoFixes = item?.sameMerchantCount ?? 0;
+  const others = useMemo(
+    () => popularCategories(lead, allTxns, 8).filter((id) => !suggestedIds.has(id)).slice(0, 5),
+    [lead, allTxns, suggestedIds],
+  );
+  const alsoFixes = Math.max(rows.length - 1, item?.sameMerchantCount ?? 0);
+  const shown = showAll ? rows : rows.slice(0, PREVIEW_ROWS);
 
   const askScope = (id: string) =>
     correction.request({ type: 'category', value: id, label: `Change category to “${categoryName(id, customCategories)}”` });
 
-  async function looksRight() {
+  async function confirm(ids: string[]) {
     setBusy(true);
     try {
-      await markReviewed([txn.id]);
-      toast('Marked as reviewed', { tone: 'success' });
+      await markReviewed(ids);
+      onAnswered(ids);
+      toast(ids.length === 1 ? 'Marked as reviewed' : `Marked ${ids.length} as reviewed`, { tone: 'success' });
     } catch (e) {
       toast(errorMessage(e), { tone: 'error' });
     } finally {
@@ -179,22 +305,16 @@ function ReviewCard({
 
   return (
     <Card role="region" aria-label="Review transaction" className="space-y-4">
-      <div>
-        <div className="mb-1 flex items-center justify-between text-xs text-fg-muted">
-          <span>{remaining} left to review</span>
-        </div>
-        <ProgressBar value={progress} label="Review progress" />
-      </div>
-
       <div className="flex items-start gap-3">
-        <CategoryIcon category={txn.category} custom={customCategories} />
+        <CategoryIcon category={lead.category} custom={customCategories} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-base font-semibold text-fg">{txn.merchant}</p>
+          <p className="truncate text-base font-semibold text-fg">{lead.merchant}</p>
           <p className="text-sm text-fg-muted">
-            {formatDate(txn.date)} · {accountName}
+            {rows.length} transaction{rows.length === 1 ? '' : 's'}
+            {lead.counterparty.vpa ? ` · ${lead.counterparty.vpa}` : ''}
           </p>
         </div>
-        <Money value={txn.amount} direction={txn.direction} tone="direction" className="text-lg font-semibold" />
+        <Money value={lead.amount} direction={lead.direction} tone="direction" className="text-lg font-semibold" />
       </div>
 
       {alsoFixes > 0 && (
@@ -205,19 +325,55 @@ function ReviewCard({
       )}
 
       <div className="flex flex-wrap gap-1.5 text-xs">
-        <Badge>{KIND_LABELS[txn.kind]}</Badge>
-        <Badge tone={txn.category === 'uncategorized' ? 'warning' : 'neutral'}>{categoryName(txn.category, customCategories)}</Badge>
-        <span className="self-center text-fg-subtle">{categorySourceLabel(txn.categorySource, txn.confidence)}</span>
+        <Badge>{KIND_LABELS[lead.kind]}</Badge>
+        <Badge tone={lead.category === 'uncategorized' ? 'warning' : 'neutral'}>{categoryName(lead.category, customCategories)}</Badge>
+        <span className="self-center text-fg-subtle">{categorySourceLabel(lead.categorySource, lead.confidence)}</span>
       </div>
-
-      {txn.reviewReasons.length > 0 && (
+      {lead.reviewReasons.length > 0 && (
         <ul className="list-disc space-y-0.5 pl-5 text-sm text-fg-muted">
-          {txn.reviewReasons.map((r) => (
+          {lead.reviewReasons.map((r) => (
             <li key={r}>{r}</li>
           ))}
         </ul>
       )}
-      <p className="break-all rounded-xl bg-surface-2 p-3 font-mono text-xs text-fg-muted">{txn.rawDescription}</p>
+
+      <fieldset>
+        <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          Rows this could change ({selectedIds.length} of {rows.length} selected)
+        </legend>
+        <ul className="divide-y divide-border rounded-xl border border-border">
+          {shown.map((r) => (
+            <li key={r.id}>
+              <label className="flex min-h-touch cursor-pointer items-center gap-3 px-3 py-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-5 w-5 shrink-0 accent-primary"
+                  checked={selected.has(r.id)}
+                  onChange={() =>
+                    setSelected((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(r.id)) next.delete(r.id);
+                      else next.add(r.id);
+                      return next;
+                    })
+                  }
+                  aria-label={`Include ${formatDate(r.date)} ${r.merchant}`}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-fg">{formatDate(r.date, { short: true })} · {accountNames.get(r.accountId) ?? 'Account'}</span>
+                  <span className="block truncate font-mono text-xs text-fg-muted">{r.rawDescription}</span>
+                </span>
+                <Money value={r.amount} direction={r.direction} tone="direction" className="shrink-0 text-sm" />
+              </label>
+            </li>
+          ))}
+        </ul>
+        {rows.length > PREVIEW_ROWS && (
+          <Button size="sm" variant="ghost" className="mt-1" onClick={() => setShowAll((v) => !v)}>
+            {showAll ? 'Show fewer' : `Show all ${rows.length}`}
+          </Button>
+        )}
+      </fieldset>
 
       <div className="space-y-3">
         <p className="text-sm font-medium text-fg">What is it?</p>
@@ -272,23 +428,30 @@ function ReviewCard({
       {correction.pending && (
         <CorrectionPrompt
           change={correction.pending.label}
-          merchant={txn.merchant}
+          merchant={lead.merchant}
           otherCount={correction.otherCount}
           busy={correction.busy}
           error={correction.error}
           onChoose={correction.apply}
+          selectedCount={selectedIds.length}
+          onChooseSelected={rows.length > 1 ? () => void correction.applySelected(selectedIds) : undefined}
           onCancel={correction.cancel}
         />
       )}
 
       <div className="flex flex-wrap gap-2">
-        <Button className="flex-1" loading={busy} icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} onClick={looksRight}>
+        <Button className="flex-1" loading={busy} icon={<CheckCircle2 className="h-4 w-4" aria-hidden />} onClick={() => void confirm([lead.id])}>
           Looks right
         </Button>
-        <Button variant="outline" icon={<SkipForward className="h-4 w-4" aria-hidden />} onClick={onSkip}>
+        {rows.length > 1 && (
+          <Button variant="outline" disabled={busy || selectedIds.length === 0} onClick={() => void confirm(selectedIds)}>
+            Looks right for {selectedIds.length} selected
+          </Button>
+        )}
+        <Button variant="outline" icon={<SkipForward className="h-4 w-4" aria-hidden />} onClick={() => onSkip(rows.map((r) => r.id))}>
           Skip
         </Button>
-        <Button variant="ghost" onClick={() => onOpen(txn.id)}>
+        <Button variant="ghost" onClick={() => onOpen(lead.id)}>
           More options
         </Button>
       </div>

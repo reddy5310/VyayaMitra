@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, Statement, UserRule } from '@/domain/types';
 import { ThemeProvider } from '@/app/theme';
 import { ToastProvider } from '@/ui';
+import { MemoryRouter } from 'react-router-dom';
 
 const mocks = vi.hoisted(() => ({
   accounts: [] as Account[],
@@ -80,11 +81,13 @@ const statement = (over: Partial<Statement> = {}): Statement => ({
 
 const renderPage = () =>
   render(
-    <ThemeProvider>
-      <ToastProvider>
-        <SettingsPage />
-      </ToastProvider>
-    </ThemeProvider>,
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <ThemeProvider>
+        <ToastProvider>
+          <SettingsPage />
+        </ToastProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
   );
 
 beforeEach(() => {
@@ -140,47 +143,12 @@ describe('delete all data', () => {
   });
 });
 
-describe('statements', () => {
-  it('shows reconciliation status and deletes a statement only after confirmation', async () => {
+describe('accounts moved', () => {
+  it('no longer manages accounts or statements here, but links to them', () => {
     renderPage();
-    expect(screen.getByText('Balanced')).toBeInTheDocument();
-    expect(screen.getByText('Mismatch')).toBeInTheDocument();
-    expect(screen.getByText('Closing balance')).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole('button', { name: /Delete statement 1 Sep/ }));
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/removes 42 transactions/)).toBeInTheDocument();
-    expect(mocks.deleteStatement).not.toHaveBeenCalled();
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete statement' }));
-    expect(mocks.deleteStatement).toHaveBeenCalledWith('s2');
-  });
-});
-
-describe('accounts', () => {
-  it('lists accounts with only the last 4 digits and validates the mask when editing', async () => {
-    renderPage();
-    expect(screen.getByText(/••1234/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: 'Edit Test Savings' }));
-    const dialog = screen.getByRole('dialog');
-    const mask = within(dialog).getByLabelText('Last 4 digits');
-    await userEvent.clear(mask);
-    await userEvent.type(mask, '12ab3456789');
-    expect(mask).toHaveValue('1234'); // digits only, capped at four
-    await userEvent.clear(mask);
-    await userEvent.type(mask, '12');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
-    expect(within(dialog).getByText(/exactly the last 4 digits/)).toBeInTheDocument();
-    expect(mocks.updateAccount).not.toHaveBeenCalled();
-  });
-
-  it('explains the cascade before deleting an account', async () => {
-    renderPage();
-    await userEvent.click(screen.getByRole('button', { name: 'Edit Test Savings' }));
-    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete account' }));
-    const confirm = screen.getByRole('dialog');
-    expect(within(confirm).getByText(/2 statements and about 84 transactions/)).toBeInTheDocument();
-    await userEvent.click(within(confirm).getByRole('button', { name: 'Delete account' }));
-    expect(mocks.deleteAccount).toHaveBeenCalledWith('a1');
+    expect(screen.queryByRole('heading', { name: 'Statements' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Accounts and statements/ })).toHaveAttribute('href', '/accounts');
+    expect(screen.getByRole('link', { name: /Learning centre/ })).toHaveAttribute('href', '/learning');
   });
 });
 

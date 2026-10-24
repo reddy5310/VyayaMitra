@@ -167,7 +167,7 @@ describe('ImportPage', () => {
     await user.click(screen.getByRole('button', { name: /unlock statement/i }));
 
     await waitFor(() => expect(mocks.prepareImport).toHaveBeenCalledTimes(2));
-    expect(mocks.prepareImport.mock.calls[1][1]).toEqual({ password: 'S3cret' });
+    expect(mocks.prepareImport.mock.calls[1][1]).toEqual(expect.objectContaining({ password: 'S3cret' }));
     // On to the account step; no password field remains anywhere.
     expect(await screen.findByText('Which account is this?')).toBeInTheDocument();
     expect(screen.queryByLabelText('Statement password')).not.toBeInTheDocument();
@@ -422,7 +422,7 @@ describe('ImportPage', () => {
         }),
       );
       await waitFor(() => expect(mocks.prepareImport).toHaveBeenCalledTimes(2));
-      expect(mocks.prepareImport.mock.calls[1][1]).toEqual({ template: draft });
+      expect(mocks.prepareImport.mock.calls[1][1]).toEqual(expect.objectContaining({ template: draft }));
 
       await user.click(await screen.findByRole('button', { name: /continue to review/i }));
       expect(await screen.findByText('VyayaMitra learned this format')).toBeInTheDocument();
@@ -508,6 +508,81 @@ describe('ImportPage', () => {
       await user.click(screen.getByRole('button', { name: 'Cancel' }));
       expect(await screen.findByText('2 of 3 rows will be imported')).toBeInTheDocument();
       expect(mocks.commitImport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('batches', () => {
+    it('lists each file with its real status, carries on past a failed file, and ends with one summary and one takeaway', async () => {
+      const user = userEvent.setup();
+      mocks.prepareImport
+        .mockResolvedValueOnce(makePreview())
+        .mockRejectedValueOnce(new UnsupportedStatementError('Unrecognised layout'))
+        .mockResolvedValueOnce(makePreview());
+      mocks.commitImport.mockResolvedValue(RESULT);
+      renderPage();
+      await user.upload(screen.getByLabelText('Choose statement files'), [pdf('a.pdf'), pdf('b.pdf'), pdf('c.pdf')]);
+
+      const list = await screen.findByRole('list', { name: 'Files in this import' });
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+      // One file is reviewed at a time: the others are waiting, and no summary yet.
+      expect(within(list).getByText('c.pdf').closest('li')).toHaveTextContent('Waiting');
+      expect(screen.queryByRole('region', { name: 'Batch summary' })).not.toBeInTheDocument();
+      await user.click(await screen.findByRole('button', { name: /import 2 transactions/i }));
+      expect(await screen.findByText('Import complete')).toBeInTheDocument();
+      expect(within(list).getByText('a.pdf').closest('li')).toHaveTextContent('2 added, 1 duplicates skipped');
+
+      await user.click(screen.getByRole('button', { name: 'Import next file (2 waiting)' }));
+      // b.pdf fails and the batch moves straight on to c.pdf.
+      await waitFor(() => expect(within(list).getByText('b.pdf').closest('li')).toHaveTextContent('Could not read'));
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+      expect(within(list).getByText('c.pdf').closest('li')).toHaveTextContent('Totals match');
+      await user.click(await screen.findByRole('button', { name: /import 2 transactions/i }));
+
+      const summary = await screen.findByRole('region', { name: 'Batch summary' });
+      expect(within(summary).getByText('2 imported, 1 could not be read, 0 skipped')).toBeInTheDocument();
+      expect(within(summary).getByText(/4 transactions added, 2 duplicates skipped/)).toBeInTheDocument();
+      expect(within(summary).getByText(/Most of the spending in these files went to Groceries: 100%/)).toBeInTheDocument();
+      expect(within(summary).getByRole('link', { name: 'Review 2 transactions' })).toHaveAttribute('href', '/activity?review=1');
+      expect(mocks.commitImport).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets a file be skipped without cancelling the others', async () => {
+      const user = userEvent.setup();
+      mocks.prepareImport.mockRejectedValueOnce(new PasswordRequiredError()).mockResolvedValueOnce(makePreview());
+      renderPage();
+      await user.upload(screen.getByLabelText('Choose statement files'), [pdf('locked.pdf'), pdf('open.pdf')]);
+
+      const list = await screen.findByRole('list', { name: 'Files in this import' });
+      await screen.findByLabelText('Statement password');
+      expect(within(list).getByText('locked.pdf').closest('li')).toHaveTextContent('Needs password');
+      await user.click(within(list).getByRole('button', { name: 'Skip locked.pdf' }));
+
+      expect(await screen.findByRole('button', { name: /continue to review/i })).toBeInTheDocument();
+      expect(within(list).getByText('locked.pdf').closest('li')).toHaveTextContent('Skipped');
+      expect(mocks.commitImport).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('review separates amount problems from category questions', () => {
+    it('filters the rows into "check amounts" and "confirm categories"', async () => {
+      const user = userEvent.setup();
+      const base = makePreview();
+      const rows = base.rows.map((r) => ({ ...r }));
+      rows[0] = { ...rows[0], row: { ...rows[0].row, warnings: ['balance_break' as const] } };
+      rows[2] = { ...rows[2], understanding: { ...rows[2].understanding, needsReview: true } };
+      mocks.prepareImport.mockResolvedValue({ ...base, rows });
+      renderPage();
+      await pick(user);
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+
+      await user.click(await screen.findByRole('radio', { name: 'Check amounts (1)' }));
+      expect(screen.getByRole('checkbox', { name: /Merchant 0/ })).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /Merchant 2/ })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('radio', { name: 'Confirm categories (1)' }));
+      expect(screen.getByRole('checkbox', { name: /Merchant 2/ })).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: /Merchant 0/ })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('radio', { name: 'All (3)' }));
+      expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     });
   });
 });

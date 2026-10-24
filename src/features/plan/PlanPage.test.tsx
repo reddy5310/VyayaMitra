@@ -1,10 +1,10 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SavingAction, SavingsGoal } from '@/domain/types';
 import type { ActionOutcome, GoalProgress, RecurringSeries } from '@/engine/analytics';
-import { addMonths, monthKey, todayIso } from '@/lib/dates';
+import { addMonths, monthEnd, monthKey, todayIso } from '@/lib/dates';
 import { ToastProvider } from '@/ui';
 
 const hooks = vi.hoisted(() => ({
@@ -31,11 +31,10 @@ const actions = vi.hoisted(() => ({
 }));
 vi.mock('@/db/actions', () => actions);
 
-vi.mock('@/app/period', () => ({
-  usePeriod: () => ({
-    period: { preset: 'last_month', start: '2025-09-01', end: '2025-09-30', label: 'September 2025' },
-  }),
+const periodMock = vi.hoisted(() => ({
+  period: { preset: 'last_month', start: '2025-09-01', end: '2025-09-30', label: 'September 2025' },
 }));
+vi.mock('@/app/period', () => ({ usePeriod: () => periodMock }));
 
 const analytics = vi.hoisted(() => ({
   budgetStatuses: vi.fn(),
@@ -46,6 +45,7 @@ const analytics = vi.hoisted(() => ({
   goalProgress: vi.fn(),
   evaluateSavingActions: vi.fn(),
   upcomingCardDues: vi.fn(),
+  dataStatus: vi.fn(),
 }));
 vi.mock('@/engine/analytics', () => analytics);
 
@@ -134,6 +134,8 @@ beforeEach(() => {
   analytics.goalProgress.mockImplementation((g: SavingsGoal) => progressFor(g));
   analytics.evaluateSavingActions.mockReturnValue([]);
   analytics.upcomingCardDues.mockReturnValue([]);
+  analytics.dataStatus.mockReturnValue({ dataThrough: '2025-09-24' });
+  periodMock.period = { preset: 'last_month', start: '2025-09-01', end: '2025-09-30', label: 'September 2025' };
 });
 
 describe('Plan tabs', () => {
@@ -194,9 +196,50 @@ describe('Budgets', () => {
       },
     ]);
     renderPlan('/plan?tab=budgets');
-    expect(screen.getByText('Watch')).toBeInTheDocument();
+    expect(screen.getByText('Within budget')).toBeInTheDocument();
     expect(screen.getByText(/do not fully cover this month/)).toBeInTheDocument();
+    expect(screen.getByText(/used/)).toHaveTextContent(/₹6,000 of ₹10,000 used · ₹4,000 remaining · data through 24 Sep/);
     expect(screen.getByRole('link', { name: 'See 3 transactions' })).toHaveAttribute('href', '/activity?ids=t1%2Ct2%2Ct3');
+  });
+});
+
+describe('Budget pace', () => {
+  const budget = { id: 'b1', category: 'groceries', monthlyLimit: 1_000_000, createdAt: '', updatedAt: '' };
+  const status = (spent: number, expected: number) => ({
+    budget,
+    month: monthKey(todayIso()),
+    spent,
+    remaining: 1_000_000 - spent,
+    usage: spent / 1_000_000,
+    expectedByToday: expected,
+    state: 'watch',
+    coverageComplete: true,
+    txnIds: [],
+  });
+  const thisMonth = () => {
+    const m = monthKey(todayIso());
+    periodMock.period = { preset: 'this_month', start: `${m}-01`, end: monthEnd(m), label: 'This month' };
+  };
+
+  it('does not warn at 80% used when that matches the pace', () => {
+    thisMonth();
+    hooks.useBudgets.mockReturnValue([budget]);
+    analytics.budgetStatuses.mockReturnValue([status(800_000, 780_000)]);
+    renderPlan();
+    expect(screen.getByText('On pace')).toBeInTheDocument();
+  });
+
+  it('warns when well ahead of pace, and shows the over amount when over', () => {
+    thisMonth();
+    hooks.useBudgets.mockReturnValue([budget]);
+    analytics.budgetStatuses.mockReturnValue([status(500_000, 200_000)]);
+    const { unmount } = renderPlan();
+    expect(screen.getByText('Ahead of pace')).toBeInTheDocument();
+    unmount();
+    analytics.budgetStatuses.mockReturnValue([status(1_250_000, 900_000)]);
+    renderPlan();
+    expect(screen.getByText('Over budget')).toBeInTheDocument();
+    expect(screen.getByText(/₹2,500 over|over$/)).toBeInTheDocument();
   });
 });
 
@@ -228,6 +271,36 @@ describe('Goals', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Add deposit' }));
     expect(within(dialog).getByText('Amount must be more than ₹0.')).toBeInTheDocument();
     expect(actions.addContribution).not.toHaveBeenCalled();
+  });
+
+  it('asks for target, deadline and monthly plan before name, icon and colour', async () => {
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=goals');
+    await user.click(screen.getByRole('button', { name: 'New goal' }));
+    const dialog = screen.getByRole('dialog');
+    const order = ['Target amount (₹)', 'Target date (optional)', 'Monthly contribution (optional)', 'Name'].map((l) => within(dialog).getByLabelText(l));
+    for (let i = 1; i < order.length; i++) {
+      expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(order[3].compareDocumentPosition(within(dialog).getByRole('radiogroup', { name: 'Goal icon' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('suggests a monthly amount from the deadline', async () => {
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=goals');
+    await user.click(screen.getByRole('button', { name: 'New goal' }));
+    const dialog = screen.getByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Target amount (₹)'), '120000');
+    fireEvent.change(within(dialog).getByLabelText('Target date (optional)'), { target: { value: monthEnd(addMonths(monthKey(todayIso()), 12)) } });
+    expect(await within(dialog).findByText(/set aside about/)).toHaveTextContent('₹10,000');
+  });
+
+  it('shows a progress ring and behind-schedule wording against the deadline', () => {
+    hooks.useGoals.mockReturnValue([{ ...goal, targetDate: '2035-01-01' }]);
+    renderPlan('/plan?tab=goals');
+    expect(screen.getByRole('progressbar', { name: 'Emergency fund progress' })).toBeInTheDocument();
+    expect(screen.getByText('Behind schedule')).toBeInTheDocument();
+    expect(screen.getByText(/By today you planned to have/)).toHaveTextContent(/so you are .* behind/);
   });
 
   it('separates verified from self-reported savings', () => {
@@ -265,10 +338,11 @@ describe('Recurring', () => {
     const user = userEvent.setup();
     renderPlan('/plan?tab=recurring');
     expect(screen.getByText('Overdue')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Review Netflix to save' }));
+    await user.click(screen.getByRole('button', { name: 'Record cancellation requested for Netflix' }));
     expect(actions.createSavingAction).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'review_recurring',
+        title: 'Cancellation requested: Netflix',
         merchantKey: 'netflix',
         baselineMonthly: 64_900,
         targetMonthly: 0,
@@ -279,8 +353,13 @@ describe('Recurring', () => {
   });
 });
 
-describe('Card dues', () => {
-  it('lists unpaid card bills under "Due soon" with status and days left', () => {
+describe('Commitment timeline', () => {
+  it('lists unpaid card bills and confirmed recurring payments for the next 60 days', () => {
+    const soon = (n: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() + n);
+      return todayIso(d);
+    };
     hooks.useLedger.mockReturnValue({
       ready: true,
       accounts: [{ id: 'cc1', name: 'Demo Card ••1234' }],
@@ -289,13 +368,15 @@ describe('Card dues', () => {
       customCategories: [],
     });
     analytics.upcomingCardDues.mockReturnValue([
-      { accountId: 'cc1', statementId: 's1', dueDate: '2025-10-05', totalDue: 1_250_000, minimumDue: 62_500, paidSoFar: 0, status: 'due', daysLeft: 3 },
-      { accountId: 'cc1', statementId: 's0', dueDate: '2025-09-05', totalDue: 900_000, paidSoFar: 900_000, status: 'paid', daysLeft: -27 },
+      { accountId: 'cc1', statementId: 's1', dueDate: soon(3), totalDue: 1_250_000, minimumDue: 62_500, paidSoFar: 0, status: 'due', daysLeft: 3 },
+      { accountId: 'cc1', statementId: 's0', dueDate: soon(-27), totalDue: 900_000, paidSoFar: 900_000, status: 'paid', daysLeft: -27 },
     ]);
+    analytics.detectRecurring.mockReturnValue([{ ...series, status: 'confirmed', nextExpected: soon(10) }]);
     renderPlan('/plan?tab=recurring');
-    expect(screen.getByRole('heading', { name: 'Due soon' })).toBeInTheDocument();
-    expect(screen.getByText('Due in 3 days')).toBeInTheDocument();
-    expect(screen.queryByText('Paid')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Next 60 days' })).toBeInTheDocument();
+    expect(screen.getByText('Demo Card ••1234 bill')).toBeInTheDocument();
+    expect(screen.getByText('In 3 days')).toBeInTheDocument();
+    expect(screen.queryByText(/Paid/)).not.toBeInTheDocument();
   });
 });
 
@@ -321,9 +402,10 @@ describe('Saving actions', () => {
     hooks.useSavingActions.mockReturnValue([action]);
     analytics.evaluateSavingActions.mockReturnValue([outcome({})]);
     renderPlan('/plan?tab=actions');
-    expect(screen.getAllByText('Estimated').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Potential').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Planned').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Waiting for a full month of data').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/a month saved/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/a month lower/)).not.toBeInTheDocument();
   });
 
   it('shows achieved savings only once complete months exist, and can mark completed', async () => {
@@ -334,7 +416,8 @@ describe('Saving actions', () => {
     actions.updateSavingAction.mockResolvedValue(undefined);
     const user = userEvent.setup();
     renderPlan('/plan?tab=actions');
-    expect(screen.getByText(/a month saved/)).toBeInTheDocument();
+    expect(screen.getAllByText(/a month lower/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/not why|not what caused it/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole('button', { name: `Mark ${action.title} completed` }));
     expect(actions.updateSavingAction).toHaveBeenCalledWith('a1', { status: 'completed' });
   });

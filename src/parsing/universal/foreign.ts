@@ -1,6 +1,6 @@
 /**
  * International card rows print the original amount next to the INR amount:
- * "... SOME SAAS INC 25 USD 2,507.54", "... MUNCHEN DE USD 31.03 2,965.55", "... USD 12.50".
+ * "... SOME SAAS INC 25 USD 2,500.00", "... BERLIN DE USD 38.50 3,210.55", "... USD 12.50".
  * The foreign amount is recognised by its ISO currency code and kept apart from the INR amount.
  */
 import type { LayoutItem } from '../pdf/types';

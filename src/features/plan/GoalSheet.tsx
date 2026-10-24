@@ -2,10 +2,11 @@ import { useState, type FormEvent } from 'react';
 import type { SavingsGoal } from '@/domain/types';
 import { createGoal, updateGoal } from '@/db/actions';
 import { isIsoDate, todayIso } from '@/lib/dates';
-import { Button, Field, Input, Notice, Sheet, cn, useToast } from '@/ui';
+import { Button, Field, Input, Money, Notice, Sheet, cn, useToast } from '@/ui';
 import { paiseToInput, parseRupeeInput } from './amount';
 import { DEFAULT_GOAL_COLOR, DEFAULT_GOAL_ICON, GOAL_COLORS, GOAL_ICONS } from './goalStyle';
 import { errorMessage } from './errors';
+import { finishDateFor, suggestMonthly } from './goalPlan';
 
 /** Create or edit a savings goal. */
 export function GoalSheet({ editing, onClose }: { editing: SavingsGoal | null; onClose: () => void }) {
@@ -13,9 +14,10 @@ export function GoalSheet({ editing, onClose }: { editing: SavingsGoal | null; o
   const [name, setName] = useState(editing?.name ?? '');
   const [target, setTarget] = useState(editing ? paiseToInput(editing.target) : '');
   const [targetDate, setTargetDate] = useState(editing?.targetDate ?? '');
+  const [monthly, setMonthly] = useState('');
   const [icon, setIcon] = useState(editing?.icon ?? DEFAULT_GOAL_ICON);
   const [color, setColor] = useState(editing?.color ?? DEFAULT_GOAL_COLOR);
-  const [errors, setErrors] = useState<{ name?: string; target?: string; date?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; target?: string; date?: string; monthly?: string }>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -27,15 +29,19 @@ export function GoalSheet({ editing, onClose }: { editing: SavingsGoal | null; o
     const parsed = parseRupeeInput(target);
     if (!parsed.ok) next.target = parsed.error;
     if (targetDate && (!isIsoDate(targetDate) || targetDate <= todayIso())) next.date = 'Pick a date in the future, or leave it empty.';
+    const plan = monthly.trim() ? parseRupeeInput(monthly) : null;
+    if (plan && !plan.ok) next.monthly = plan.error;
     setErrors(next);
     if (Object.keys(next).length > 0 || !parsed.ok) return;
+    // With a monthly plan but no deadline, the deadline is the month the plan finishes.
+    const deadline = targetDate || (plan?.ok ? finishDateFor(parsed.paise, plan.paise, todayIso()) : undefined);
 
     setBusy(true);
     try {
       if (editing) {
-        await updateGoal(editing.id, { name: name.trim(), target: parsed.paise, targetDate: targetDate || undefined, icon, color });
+        await updateGoal(editing.id, { name: name.trim(), target: parsed.paise, targetDate: deadline, icon, color });
       } else {
-        await createGoal({ name: name.trim(), target: parsed.paise, targetDate: targetDate || undefined, icon, color });
+        await createGoal({ name: name.trim(), target: parsed.paise, targetDate: deadline, icon, color });
       }
       toast(editing ? 'Goal updated.' : 'Goal created.', { tone: 'success' });
       onClose();
@@ -46,22 +52,12 @@ export function GoalSheet({ editing, onClose }: { editing: SavingsGoal | null; o
     }
   }
 
+  const targetParsed = parseRupeeInput(target);
+  const suggested = targetParsed.ok && targetDate && targetDate > todayIso() ? suggestMonthly(targetParsed.paise, todayIso(), targetDate) : null;
+
   return (
     <Sheet open onClose={onClose} size="sm" title={editing ? 'Edit goal' : 'New goal'} description="Something you are saving towards.">
       <form onSubmit={submit} noValidate className="space-y-4">
-        <Field label="Name" error={errors.name}>
-          {({ id, describedBy, invalid }) => (
-            <Input
-              id={id}
-              value={name}
-              maxLength={60}
-              placeholder="Emergency fund, Goa trip…"
-              aria-describedby={describedBy}
-              aria-invalid={invalid || undefined}
-              onChange={(e) => setName(e.target.value)}
-            />
-          )}
-        </Field>
         <Field label="Target amount (₹)" error={errors.target} hint="For example 1,50,000">
           {({ id, describedBy, invalid }) => (
             <Input
@@ -88,6 +84,47 @@ export function GoalSheet({ editing, onClose }: { editing: SavingsGoal | null; o
           )}
         </Field>
 
+        <Field
+          label="Monthly contribution (optional)"
+          error={errors.monthly}
+          hint={
+            suggested !== null ? (
+              <>
+                To reach it by your deadline, set aside about <Money value={suggested} whole /> a month.{' '}
+                <button type="button" className="font-medium text-primary underline" onClick={() => setMonthly(paiseToInput(suggested))}>
+                  Use this
+                </button>
+              </>
+            ) : (
+              'If you skip the deadline, we use this to work out when you would finish.'
+            )
+          }
+        >
+          {({ id, describedBy, invalid }) => (
+            <Input
+              id={id}
+              inputMode="decimal"
+              autoComplete="off"
+              value={monthly}
+              aria-describedby={describedBy}
+              aria-invalid={invalid || undefined}
+              onChange={(e) => setMonthly(e.target.value)}
+            />
+          )}
+        </Field>
+        <Field label="Name" error={errors.name}>
+          {({ id, describedBy, invalid }) => (
+            <Input
+              id={id}
+              value={name}
+              maxLength={60}
+              placeholder="Emergency fund, Goa trip…"
+              aria-describedby={describedBy}
+              aria-invalid={invalid || undefined}
+              onChange={(e) => setName(e.target.value)}
+            />
+          )}
+        </Field>
         <fieldset>
           <legend className="mb-1.5 text-sm font-medium text-fg">Icon</legend>
           <div role="radiogroup" aria-label="Goal icon" className="flex flex-wrap gap-2">

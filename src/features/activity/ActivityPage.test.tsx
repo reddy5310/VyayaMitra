@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   suggestCategories: vi.fn(),
   setTransactionCategory: vi.fn(),
   setTransactionKind: vi.fn(),
+  setTransactionsCategory: vi.fn(),
+  setTransactionsKind: vi.fn(),
   renameMerchant: vi.fn(),
   setTransactionNote: vi.fn(),
   markReviewed: vi.fn(),
@@ -39,6 +41,8 @@ vi.mock('@/db/hooks', () => ({
 vi.mock('@/db/actions', () => ({
   setTransactionCategory: mocks.setTransactionCategory,
   setTransactionKind: mocks.setTransactionKind,
+  setTransactionsCategory: mocks.setTransactionsCategory,
+  setTransactionsKind: mocks.setTransactionsKind,
   renameMerchant: mocks.renameMerchant,
   setTransactionNote: mocks.setTransactionNote,
   markReviewed: mocks.markReviewed,
@@ -100,7 +104,7 @@ describe('ActivityPage', () => {
   it('turns URL params and the shared period into one LedgerQuery', () => {
     const txns = [swiggy(), swiggy()];
     mocks.useLedger.mockReturnValue(ledger(txns));
-    renderPage('/activity?category=food_dining&account=acc1&kind=expense&review=1&q=swiggy');
+    renderPage('/activity?category=food_dining&account=acc1&kind=expense&q=swiggy');
 
     expect(mocks.applyQuery).toHaveBeenCalledWith(txns, {
       start: '2025-09-01',
@@ -108,13 +112,19 @@ describe('ActivityPage', () => {
       accountIds: ['acc1'],
       categories: ['food_dining'],
       kinds: ['expense'],
-      needsReview: true,
       search: 'swiggy',
     });
     // The header totals use the very same filtered set.
     expect(mocks.summarize).toHaveBeenLastCalledWith(txns, expect.objectContaining({ start: '2025-09-01', end: '2025-09-30' }));
     expect(screen.getByRole('searchbox', { name: /search transactions/i })).toHaveValue('swiggy');
     expect(screen.getByRole('list', { name: /active filters/i })).toBeInTheDocument();
+  });
+
+  it('review mode covers every period, matching the Overview count', () => {
+    const txns = [swiggy()];
+    mocks.useLedger.mockReturnValue(ledger(txns));
+    renderPage('/activity?review=1');
+    expect(mocks.applyQuery).toHaveBeenCalledWith(txns, { needsReview: true });
   });
 
   it('shows exactly the ids from an insight with a banner', () => {
@@ -177,7 +187,7 @@ describe('ActivityPage', () => {
     // Nothing is written until the scope is chosen.
     expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
     expect(within(dialog).getByText('2 other transactions match')).toBeInTheDocument();
-    await user.click(within(dialog).getByRole('button', { name: /always for “swiggy”/i }));
+    await user.click(within(dialog).getByRole('button', { name: /remember for “swiggy”/i }));
 
     expect(mocks.setTransactionCategory).toHaveBeenCalledWith('target', 'shopping', 'merchant');
     expect(await screen.findByText('Updated 3 transactions and remembered for Swiggy')).toBeInTheDocument();
@@ -193,14 +203,14 @@ describe('ActivityPage', () => {
 
     const dialog = await screen.findByRole('dialog');
     await user.selectOptions(within(dialog).getByLabelText('Type'), 'p2p_out');
-    await user.click(within(dialog).getByRole('button', { name: /just this transaction/i }));
+    await user.click(within(dialog).getByRole('button', { name: /apply to this transaction/i }));
     expect(mocks.setTransactionKind).toHaveBeenCalledWith('target', 'p2p_out', 'this');
   });
 
   it('review mode shows one card at a time with quick category chips', async () => {
     const user = userEvent.setup();
     const a = swiggy({ id: 'a', needsReview: true, category: 'uncategorized', categorySource: 'none', reviewReasons: ['Merchant not recognised'] });
-    const b = swiggy({ id: 'b', needsReview: true });
+    const b = swiggy({ id: 'b', merchant: 'Other', merchantKey: 'other', needsReview: true });
     mocks.useLedger.mockReturnValue(ledger([a, b]));
     mocks.markReviewed.mockResolvedValue(undefined);
     renderPage('/activity?review=1');
@@ -213,9 +223,12 @@ describe('ActivityPage', () => {
     await user.click(screen.getByRole('button', { name: /looks right/i }));
     expect(mocks.markReviewed).toHaveBeenCalledWith(['a']);
 
+    // Answered rows leave the queue at once; skipping the last one ends it.
+    expect(await screen.findByText('1 left to review')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /skip/i }));
-    expect(screen.getByText('1 left to review')).toBeInTheDocument();
+    expect(screen.getByText('You have gone through them all')).toBeInTheDocument();
   });
+
   it('orders the review queue by reviewPriority, not by date', async () => {
     const user = userEvent.setup();
     const small = swiggy({ id: 'small', merchant: 'Small Shop', merchantKey: 'small shop', needsReview: true });
@@ -259,10 +272,50 @@ describe('ActivityPage', () => {
     expect(within(group).getByText('You chose this for similar merchants')).toBeInTheDocument();
     await user.click(within(group).getByRole('button', { name: /food & dining, 72% likely/i }));
     expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: /always for “swiggy”/i }));
+    await user.click(screen.getByRole('button', { name: /remember for “swiggy”/i }));
 
     expect(mocks.setTransactionCategory).toHaveBeenCalledWith('a', 'food_dining', 'merchant');
     // The other Swiggy row (b) is skipped past even though the mocked data has not changed.
     await waitFor(() => expect(within(screen.getByRole('region', { name: /review transaction/i })).getByText('Chai Point')).toBeInTheDocument());
+  });
+  it('applies a suggestion to only the ticked rows of a merchant group', async () => {
+    const user = userEvent.setup();
+    const rows = ['a', 'b', 'd'].map((id) => swiggy({ id, needsReview: true, category: 'uncategorized', categorySource: 'none' }));
+    mocks.useLedger.mockReturnValue(ledger(rows));
+    mocks.suggestCategories.mockReturnValue([{ category: 'food_dining', probability: 0.7, source: 'learned', reason: 'Learned' }]);
+    mocks.setTransactionsCategory.mockResolvedValue({ updated: 2 });
+    mocks.markReviewed.mockResolvedValue(undefined);
+    renderPage('/activity?review=1');
+
+    expect(screen.getByText(/3 of 3 selected/)).toBeInTheDocument();
+    await user.click(screen.getAllByRole('checkbox')[2]);
+    expect(screen.getByText(/2 of 3 selected/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /food & dining, 70% likely/i }));
+    await user.click(screen.getByRole('button', { name: /apply to these 2 selected/i }));
+
+    expect(mocks.setTransactionsCategory).toHaveBeenCalledWith(['a', 'b'], 'food_dining');
+    expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
+    expect(await screen.findByText('Updated 2 selected transactions')).toBeInTheDocument();
+  });
+
+  it('keeps "check these amounts" apart from "confirm categories"', async () => {
+    const user = userEvent.setup();
+    const broken = swiggy({ id: 'x', merchant: 'Odd Row', merchantKey: 'odd row', needsReview: true, reviewReasons: ['Running balance does not match this row'] });
+    const unsure = swiggy({ id: 'y', merchant: 'Chai Point', merchantKey: 'chai point', needsReview: true, category: 'uncategorized', categorySource: 'none', reviewReasons: ['Merchant not recognised'] });
+    mocks.useLedger.mockReturnValue(ledger([unsure, broken]));
+    mocks.markReviewed.mockResolvedValue(undefined);
+    renderPage('/activity?review=1');
+
+    // Amounts come first, with the statement's own text and no category chips.
+    expect(screen.getByRole('radio', { name: 'Check these amounts (1)' })).toBeChecked();
+    const card = screen.getByRole('region', { name: /check this amount/i });
+    expect(within(card).getByText('Running balance does not match this row')).toBeInTheDocument();
+    expect(within(card).getByText(/as printed on the statement/i)).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /other categories/i })).not.toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: /amount is correct/i }));
+    expect(mocks.markReviewed).toHaveBeenCalledWith(['x']);
+
+    await user.click(screen.getByRole('radio', { name: 'Confirm categories (1)' }));
+    expect(within(screen.getByRole('region', { name: /review transaction/i })).getByText('Chai Point')).toBeInTheDocument();
   });
 });

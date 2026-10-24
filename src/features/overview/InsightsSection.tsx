@@ -47,16 +47,18 @@ interface Props {
   baselines: { category: string; monthlyAverage: Paise }[];
   customCategories: readonly CustomCategory[];
   today: IsoDate;
+  title?: string;
+  subtitle?: string;
 }
 
-export function InsightsSection({ insights, actions, baselines, customCategories, today }: Props) {
+export function InsightsSection({ insights, actions, baselines, customCategories, today, title = 'Insights', subtitle = 'What changed, and what you can do about it' }: Props) {
   const [showAll, setShowAll] = useState(false);
   const [limitFor, setLimitFor] = useState<Insight | null>(null);
   const visible = showAll ? insights : insights.slice(0, COLLAPSED_COUNT);
 
   return (
     <Card>
-      <CardHeader title="Insights" subtitle="What changed, and what you can do about it" />
+      <CardHeader title={title} subtitle={subtitle} />
       {insights.length === 0 ? (
         <p className="py-2 text-sm text-fg-muted">Nothing stands out for this period. Insights appear as more data comes in.</p>
       ) : (

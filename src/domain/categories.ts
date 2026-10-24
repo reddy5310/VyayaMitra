@@ -6,7 +6,10 @@ export interface CategoryDef {
   group: CategoryGroup;
   /** lucide-react icon name. */
   icon: string;
-  /** Index into the --chart-1..--chart-10 palette. */
+  /**
+   * Stable colour slot: 1..24 index the --chart-N palette (each spending category has its own, never reused),
+   * 0 = neutral (transfers, refunds, needs review). Colour never encodes rank or status.
+   */
   colorIndex: number;
 }
 
@@ -25,34 +28,34 @@ export const BUILTIN_CATEGORIES: readonly CategoryDef[] = [
   // lifestyle
   { id: 'food_dining', name: 'Food & dining', group: 'lifestyle', icon: 'UtensilsCrossed', colorIndex: 9 },
   { id: 'shopping', name: 'Shopping', group: 'lifestyle', icon: 'ShoppingBag', colorIndex: 10 },
-  { id: 'entertainment', name: 'Entertainment', group: 'lifestyle', icon: 'Clapperboard', colorIndex: 1 },
-  { id: 'subscriptions', name: 'Subscriptions', group: 'lifestyle', icon: 'Repeat', colorIndex: 2 },
-  { id: 'travel', name: 'Travel & stays', group: 'lifestyle', icon: 'Plane', colorIndex: 3 },
-  { id: 'personal_care', name: 'Personal care', group: 'lifestyle', icon: 'Sparkles', colorIndex: 4 },
-  { id: 'fitness', name: 'Fitness & sports', group: 'lifestyle', icon: 'Dumbbell', colorIndex: 5 },
-  { id: 'gifts_donations', name: 'Gifts & donations', group: 'lifestyle', icon: 'Gift', colorIndex: 6 },
+  { id: 'entertainment', name: 'Entertainment', group: 'lifestyle', icon: 'Clapperboard', colorIndex: 11 },
+  { id: 'subscriptions', name: 'Subscriptions', group: 'lifestyle', icon: 'Repeat', colorIndex: 12 },
+  { id: 'travel', name: 'Travel & stays', group: 'lifestyle', icon: 'Plane', colorIndex: 13 },
+  { id: 'personal_care', name: 'Personal care', group: 'lifestyle', icon: 'Sparkles', colorIndex: 14 },
+  { id: 'fitness', name: 'Fitness & sports', group: 'lifestyle', icon: 'Dumbbell', colorIndex: 15 },
+  { id: 'gifts_donations', name: 'Gifts & donations', group: 'lifestyle', icon: 'Gift', colorIndex: 16 },
   // people
-  { id: 'sent_to_people', name: 'Sent to people', group: 'people', icon: 'Send', colorIndex: 7 },
-  { id: 'family_support', name: 'Family support', group: 'people', icon: 'Users', colorIndex: 8 },
+  { id: 'sent_to_people', name: 'Sent to people', group: 'people', icon: 'Send', colorIndex: 17 },
+  { id: 'family_support', name: 'Family support', group: 'people', icon: 'Users', colorIndex: 18 },
   // commitments
-  { id: 'loan_emi', name: 'Loan EMIs', group: 'commitments', icon: 'Landmark', colorIndex: 9 },
+  { id: 'loan_emi', name: 'Loan EMIs', group: 'commitments', icon: 'Landmark', colorIndex: 19 },
   // fees & cash
-  { id: 'fees_charges', name: 'Fees & charges', group: 'fees', icon: 'Receipt', colorIndex: 10 },
-  { id: 'taxes', name: 'Taxes', group: 'fees', icon: 'FileText', colorIndex: 1 },
-  { id: 'cash', name: 'Cash', group: 'cash', icon: 'Banknote', colorIndex: 2 },
+  { id: 'fees_charges', name: 'Fees & charges', group: 'fees', icon: 'Receipt', colorIndex: 20 },
+  { id: 'taxes', name: 'Taxes', group: 'fees', icon: 'FileText', colorIndex: 21 },
+  { id: 'cash', name: 'Cash', group: 'cash', icon: 'Banknote', colorIndex: 22 },
   // income
-  { id: 'salary', name: 'Salary', group: 'income', icon: 'BriefcaseBusiness', colorIndex: 3 },
-  { id: 'interest_income', name: 'Interest', group: 'income', icon: 'Percent', colorIndex: 4 },
-  { id: 'other_income', name: 'Other income', group: 'income', icon: 'Coins', colorIndex: 5 },
-  { id: 'received_from_people', name: 'Received from people', group: 'people', icon: 'HandCoins', colorIndex: 6 },
+  { id: 'salary', name: 'Salary', group: 'income', icon: 'BriefcaseBusiness', colorIndex: 23 },
+  { id: 'interest_income', name: 'Interest', group: 'income', icon: 'Percent', colorIndex: 23 },
+  { id: 'other_income', name: 'Other income', group: 'income', icon: 'Coins', colorIndex: 23 },
+  { id: 'received_from_people', name: 'Received from people', group: 'people', icon: 'HandCoins', colorIndex: 23 },
   // saving
-  { id: 'investments', name: 'Investments', group: 'saving', icon: 'TrendingUp', colorIndex: 7 },
+  { id: 'investments', name: 'Investments', group: 'saving', icon: 'TrendingUp', colorIndex: 24 },
   // transfer (neutral)
-  { id: 'self_transfer', name: 'Between my accounts', group: 'transfer', icon: 'ArrowLeftRight', colorIndex: 8 },
-  { id: 'card_payment', name: 'Card bill payment', group: 'transfer', icon: 'CreditCard', colorIndex: 9 },
-  { id: 'loan_received', name: 'Loan received', group: 'transfer', icon: 'Landmark', colorIndex: 10 },
-  { id: 'refunds', name: 'Refunds', group: 'other', icon: 'Undo2', colorIndex: 1 },
-  { id: 'reversal', name: 'Reversal', group: 'transfer', icon: 'RotateCcw', colorIndex: 2 },
+  { id: 'self_transfer', name: 'Between my accounts', group: 'transfer', icon: 'ArrowLeftRight', colorIndex: 0 },
+  { id: 'card_payment', name: 'Card bill payment', group: 'transfer', icon: 'CreditCard', colorIndex: 0 },
+  { id: 'loan_received', name: 'Loan received', group: 'transfer', icon: 'Landmark', colorIndex: 0 },
+  { id: 'refunds', name: 'Refunds', group: 'other', icon: 'Undo2', colorIndex: 0 },
+  { id: 'reversal', name: 'Reversal', group: 'transfer', icon: 'RotateCcw', colorIndex: 0 },
   // fallback
   { id: UNCATEGORIZED, name: 'Needs review', group: 'other', icon: 'CircleHelp', colorIndex: 3 },
 ];
@@ -100,7 +103,7 @@ export function allCategories(custom: readonly CustomCategory[] = []): CategoryD
       name: c.name,
       group: c.group,
       icon: c.icon ?? 'Tag',
-      colorIndex: (i % 10) + 1,
+      colorIndex: (i % 24) + 1,
     })),
   ];
 }

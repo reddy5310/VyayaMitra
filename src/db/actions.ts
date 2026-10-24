@@ -262,6 +262,100 @@ export async function setTransactionCategory(
   });
 }
 
+/** Apply a user-chosen kind to a transaction: the category follows the kind unless both are spending (or the user set it). */
+function retargetKind(
+  t: Transaction,
+  kind: TxnKind,
+  source: 'user' | 'user_rule',
+  custom: readonly CustomCategory[],
+  now: string,
+): Transaction {
+  const cat =
+    t.categorySource === 'user_txn'
+      ? { category: t.category, categorySource: t.categorySource }
+      : categoryAfterKindChange(kind, t, custom);
+  return {
+    ...t,
+    kind,
+    kindSource: source,
+    category: cat.category,
+    categorySource: cat.categorySource,
+    confidence: 1,
+    needsReview: false,
+    reviewReasons: [],
+    reasons: keepRenamed(t, [source === 'user' ? REASON_USER_SET : userRuleReason(t)]),
+    updatedAt: now,
+  };
+}
+
+const BULK_MAX = 5000;
+
+async function loadSelected(txnIds: unknown): Promise<Transaction[]> {
+  if (!Array.isArray(txnIds) || txnIds.length === 0) throw new ValidationError('Select at least one transaction.');
+  const ids = [...new Set(txnIds.filter((i): i is string => typeof i === 'string'))];
+  if (ids.length > BULK_MAX) throw new ValidationError(`Select at most ${BULK_MAX} transactions at a time.`);
+  const found = (await db.transactions.bulkGet(ids)).filter((t): t is Transaction => !!t);
+  if (found.length === 0) throw new ValidationError('Those transactions no longer exist.');
+  return found;
+}
+
+/** Set one category on every selected transaction (each becomes a user_txn decision; no rule is created). */
+export async function setTransactionsCategory(txnIds: string[], category: string): Promise<CorrectionResult> {
+  return writeAll(async () => {
+    const txns = await loadSelected(txnIds);
+    const cat = await requireCategory(category);
+    const now = nowTimestamp();
+    await db.transactions.bulkPut(
+      txns.map((t) => ({
+        ...t,
+        category: cat,
+        categorySource: 'user_txn' as const,
+        confidence: 1,
+        needsReview: false,
+        reviewReasons: [],
+        reasons: keepRenamed(t, [REASON_USER_SET]),
+        updatedAt: now,
+      })),
+    );
+    await recordFeedback(
+      txns.map((t) => ({
+        txn: t,
+        action: 'category' as const,
+        scope: 'this' as const,
+        before: decisionSnapshot(t),
+        after: { kind: t.kind, category: cat },
+      })),
+    );
+    await retrainLearnedModel();
+    return { updated: txns.length };
+  });
+}
+
+/** Set one kind on every selected transaction (kindSource 'user'), then relink the ledger once. */
+export async function setTransactionsKind(txnIds: string[], kind: TxnKind): Promise<CorrectionResult> {
+  requireOneOf(kind, USER_SELECTABLE_KINDS, 'Type');
+  return writeAll(async () => {
+    const txns = await loadSelected(txnIds);
+    const custom = await db.customCategories.toArray();
+    const now = nowTimestamp();
+    const next = txns.map((t) => retargetKind(t, kind, 'user', custom, now));
+    await db.transactions.bulkPut(next);
+    await unlinkGroup(new Set(next.map((t) => t.id)));
+    await relinkAll();
+    await recordFeedback(
+      txns.map((t, i) => ({
+        txn: t,
+        action: 'kind' as const,
+        scope: 'this' as const,
+        before: decisionSnapshot(t),
+        after: { kind, category: next[i].category },
+      })),
+    );
+    await retrainLearnedModel();
+    return { updated: next.length };
+  });
+}
+
 export async function setTransactionKind(txnId: string, kind: TxnKind, scope: CorrectionScope): Promise<CorrectionResult> {
   requireScope(scope);
   requireOneOf(kind, USER_SELECTABLE_KINDS, 'Type');
@@ -270,24 +364,8 @@ export async function setTransactionKind(txnId: string, kind: TxnKind, scope: Co
     const custom = await db.customCategories.toArray();
     const now = nowTimestamp();
 
-    const retarget = (t: Transaction, source: 'user' | 'user_rule'): Transaction => {
-      const cat =
-        t.categorySource === 'user_txn'
-          ? { category: t.category, categorySource: t.categorySource }
-          : categoryAfterKindChange(kind, t, custom);
-      return {
-        ...t,
-        kind,
-        kindSource: source,
-        category: cat.category,
-        categorySource: cat.categorySource,
-        confidence: 1,
-        needsReview: false,
-        reviewReasons: [],
-        reasons: keepRenamed(t, [source === 'user' ? REASON_USER_SET : userRuleReason(t)]),
-        updatedAt: now,
-      };
-    };
+    const retarget = (t: Transaction, source: 'user' | 'user_rule'): Transaction =>
+      retargetKind(t, kind, source, custom, now);
 
     let targets: Transaction[];
     let ruleId: string | undefined;

@@ -5,12 +5,14 @@ import { deleteContribution, deleteGoal, updateGoal } from '@/db/actions';
 import { useGoalContributions, useGoals, useLedger } from '@/db/hooks';
 import { goalProgress, type GoalProgress } from '@/engine/analytics';
 import { formatDate, formatMonth, monthKey, todayIso } from '@/lib/dates';
-import { Badge, Button, Card, EmptyState, IconButton, Money, ProgressBar, useToast, type Tone } from '@/ui';
+import { Badge, Button, Card, EmptyState, IconButton, Money, useToast, type Tone } from '@/ui';
 import { ContributionSheet } from './ContributionSheet';
 import { GoalSheet } from './GoalSheet';
 import { goalIcon } from './goalStyle';
 import { errorMessage } from './errors';
+import { Meter, ProgressRing } from './Meter';
 import { ConfirmSheet, ListSkeleton } from './planUi';
+import { expectedSavedByToday } from './goalPlan';
 
 type Dialog =
   | { kind: 'goal'; editing: SavingsGoal | null }
@@ -153,11 +155,14 @@ export function GoalsTab() {
   );
 }
 
-function trackBadge(p: GoalProgress): { label: string; tone: Tone } {
-  if (p.remaining <= 0) return { label: 'Goal reached', tone: 'positive' };
-  if (p.onTrack === true) return { label: 'On track', tone: 'positive' };
-  if (p.onTrack === false) return { label: 'Behind', tone: 'warning' };
-  return { label: 'No target date', tone: 'neutral' };
+/** On/behind schedule from a straight line between the day the goal was created and its deadline. */
+function schedule(p: GoalProgress, today: string): { label: string; tone: Tone; expected: number | null; gap: number } {
+  const expected = expectedSavedByToday(p.goal, today);
+  if (p.remaining <= 0) return { label: 'Goal reached', tone: 'positive', expected, gap: 0 };
+  if (expected === null) return { label: 'No deadline', tone: 'neutral', expected, gap: 0 };
+  const gap = p.saved - expected;
+  if (Math.abs(gap) <= expected * 0.05) return { label: 'On schedule', tone: 'positive', expected, gap };
+  return gap > 0 ? { label: 'Ahead of schedule', tone: 'positive', expected, gap } : { label: 'Behind schedule', tone: 'warning', expected, gap };
 }
 
 function GoalCard({
@@ -179,22 +184,22 @@ function GoalCard({
 }) {
   const { goal } = p;
   const Icon = goalIcon(goal.icon);
-  const badge = trackBadge(p);
+  const today = todayIso();
+  const badge = schedule(p, today);
   const history = [...p.contributions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const unverified = Math.max(0, p.saved - p.verified);
   return (
     <Card className="h-full">
       <div className="flex items-start gap-3">
-        <span
-          aria-hidden
-          className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-          style={{ backgroundColor: `color-mix(in srgb, ${goal.color} 16%, transparent)`, color: goal.color }}
-        >
-          <Icon className="h-5 w-5" />
-        </span>
+        <ProgressRing value={p.progress} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name} progress`}>
+          {Math.round(Math.min(1, p.progress) * 100)}%
+        </ProgressRing>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="text-base font-semibold text-fg">{goal.name}</h3>
+            <h3 className="flex items-center gap-1.5 text-base font-semibold text-fg">
+              <Icon className="h-4 w-4" style={{ color: goal.color }} aria-hidden />
+              {goal.name}
+            </h3>
             <Badge tone={badge.tone}>{badge.label}</Badge>
           </div>
           <p className="text-sm text-fg-muted">
@@ -215,10 +220,30 @@ function GoalCard({
         </div>
       </div>
 
-      <ProgressBar className="mt-3" value={p.progress} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name} progress`} />
-      <p className="mt-1 text-xs text-fg-muted">
-        {Math.round(Math.min(1, p.progress) * 100)}% · <Money value={p.remaining} whole /> to go
-      </p>
+      <div className="mt-3">
+        <Meter value={p.progress} marker={badge.expected !== null ? badge.expected / goal.target : null} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name}: saved compared with where you planned to be`} />
+        <p className="mt-1.5 text-xs text-fg-muted">
+          <Money value={p.remaining} whole /> to go.{' '}
+          {badge.expected !== null && p.remaining > 0 ? (
+            <>
+              By today you planned to have <Money value={badge.expected} whole />; you have <Money value={p.saved} whole />
+              {badge.gap < 0 ? (
+                <>
+                  , so you are <Money value={-badge.gap} whole /> behind.
+                </>
+              ) : badge.gap > 0 ? (
+                <>
+                  , <Money value={badge.gap} whole /> ahead.
+                </>
+              ) : (
+                '.'
+              )}
+            </>
+          ) : badge.expected === null && p.remaining > 0 ? (
+            'Add a deadline to see whether you are on schedule.'
+          ) : null}
+        </p>
+      </div>
 
       <dl className="mt-3 space-y-1.5 text-sm">
         <div className="flex justify-between gap-3">

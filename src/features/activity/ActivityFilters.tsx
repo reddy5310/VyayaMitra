@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { ListFilter, Search, X } from 'lucide-react';
 import { CATEGORY_GROUP_LABELS, allCategories, categoryName } from '@/domain/categories';
 import { KIND_LABELS } from '@/domain/kinds';
@@ -46,12 +46,15 @@ export function ActivityFilters({
   customCategories,
   onChange,
   onClearAll,
+  searchRef,
 }: {
   filters: Filters;
   accounts: readonly Account[];
   customCategories: readonly CustomCategory[];
   onChange: (patch: Partial<Filters>) => void;
   onClearAll: () => void;
+  /** Lets the page focus the search box (the `/` shortcut). */
+  searchRef?: RefObject<HTMLInputElement>;
 }) {
   const [search, setSearch] = useDebouncedField(filters.q, (q) => onChange({ q }));
   const [open, setOpen] = useState(false);
@@ -82,6 +85,8 @@ export function ActivityFilters({
         <div className="relative min-w-0 flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle" aria-hidden />
           <Input
+            ref={searchRef}
+            aria-keyshortcuts="/"
             type="search"
             inputMode="search"
             aria-label="Search transactions"

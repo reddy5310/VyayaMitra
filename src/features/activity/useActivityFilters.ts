@@ -41,7 +41,8 @@ export function filtersFromParams(sp: URLSearchParams): ActivityFilters {
 export function buildQuery(f: ActivityFilters, period: Pick<Period, 'start' | 'end'>): LedgerQuery {
   const q: LedgerQuery = {};
   if (f.ids.length) q.ids = f.ids;
-  else {
+  // The review queue is everything that still needs a look, whatever the period (matches the Overview count).
+  else if (!f.review) {
     q.start = period.start;
     q.end = period.end;
   }

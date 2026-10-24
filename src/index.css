@@ -11,11 +11,11 @@
  */
 :root {
   color-scheme: light;
-  --bg: 247 248 250;
+  --bg: 249 247 243;
   --surface: 255 255 255;
-  --surface-2: 241 243 246;
-  --surface-3: 229 232 237;
-  --border: 226 229 234;
+  --surface-2: 242 239 233;
+  --surface-3: 232 228 220;
+  --border: 226 222 213;
   --border-strong: 139 148 162;
   --fg: 17 24 39;
   --fg-muted: 75 85 99;
@@ -34,28 +34,53 @@
   --info-soft: 219 234 254;
   --focus: 13 148 136;
 
-  /* Chart palette (categorical) — readable on light surfaces. */
-  --chart-1: 15 118 110;
-  --chart-2: 37 99 235;
-  --chart-3: 217 119 6;
-  --chart-4: 190 24 93;
-  --chart-5: 124 58 237;
-  --chart-6: 22 163 74;
-  --chart-7: 220 38 38;
-  --chart-8: 8 145 178;
-  --chart-9: 202 138 4;
-  --chart-10: 100 116 139;
-  --chart-grid: 229 232 237;
+  /*
+   * Categorical palette: one FIXED slot per category (src/domain/categories.ts colorIndex), so a category
+   * keeps its colour on every screen. Slots are ordered so neighbours differ most. Hues avoid the status
+   * colours (red, green, amber) and the teal accent; colour is never the only cue (icons and labels
+   * accompany it). Graphical contrast >= 3:1 on --surface in each theme.
+   *  1 groceries      2 rent_housing    3 utilities       4 mobile_internet  5 transport      6 healthcare
+   *  7 insurance      8 education       9 food_dining    10 shopping        11 entertainment 12 subscriptions
+   * 13 travel        14 personal_care  15 fitness        16 gifts_donations 17 sent_to_people 18 family_support
+   * 19 loan_emi      20 fees_charges   21 taxes         22 cash            23 income group  24 investments
+   *  0 neutral: transfers, card payments, refunds, reversals, loan received
+   */
+  --chart-1: 62 83 111;
+  --chart-2: 204 62 204;
+  --chart-3: 102 145 59;
+  --chart-4: 184 107 81;
+  --chart-5: 137 36 95;
+  --chart-6: 68 68 167;
+  --chart-7: 111 103 62;
+  --chart-8: 62 133 204;
+  --chart-9: 150 98 167;
+  --chart-10: 98 150 167;
+  --chart-11: 167 98 121;
+  --chart-12: 129 36 137;
+  --chart-13: 204 62 156;
+  --chart-14: 204 62 109;
+  --chart-15: 133 62 204;
+  --chart-16: 167 134 68;
+  --chart-17: 87 62 111;
+  --chart-18: 111 75 62;
+  --chart-19: 36 78 137;
+  --chart-20: 62 109 204;
+  --chart-21: 111 62 87;
+  --chart-22: 167 127 98;
+  --chart-23: 98 127 167;
+  --chart-24: 117 123 50;
+  --chart-neutral: 128 134 146;
+  --chart-grid: 233 229 222;
   --chart-axis: 94 102 118;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
-  --bg: 9 13 22;
-  --surface: 17 23 34;
-  --surface-2: 24 31 45;
-  --surface-3: 34 43 59;
-  --border: 37 46 62;
+  --bg: 11 13 18;
+  --surface: 19 22 28;
+  --surface-2: 27 31 39;
+  --surface-3: 37 42 52;
+  --border: 40 45 55;
   --border-strong: 104 117 141;
   --fg: 236 239 244;
   --fg-muted: 168 177 191;
@@ -74,17 +99,32 @@
   --info-soft: 23 42 77;
   --focus: 45 212 191;
 
-  --chart-1: 45 212 191;
-  --chart-2: 96 165 250;
-  --chart-3: 251 191 36;
-  --chart-4: 244 114 182;
-  --chart-5: 167 139 250;
-  --chart-6: 74 222 128;
-  --chart-7: 248 113 113;
-  --chart-8: 34 211 238;
-  --chart-9: 250 204 21;
-  --chart-10: 148 163 184;
-  --chart-grid: 37 46 62;
+  --chart-1: 144 164 193;
+  --chart-2: 133 193 103;
+  --chart-3: 219 118 219;
+  --chart-4: 193 148 103;
+  --chart-5: 227 150 176;
+  --chart-6: 186 207 170;
+  --chart-7: 169 150 227;
+  --chart-8: 118 210 219;
+  --chart-9: 193 185 103;
+  --chart-10: 222 196 205;
+  --chart-11: 231 182 236;
+  --chart-12: 219 118 177;
+  --chart-13: 217 189 161;
+  --chart-14: 190 219 228;
+  --chart-15: 143 178 118;
+  --chart-16: 182 182 236;
+  --chart-17: 86 169 210;
+  --chart-18: 221 150 227;
+  --chart-19: 178 168 118;
+  --chart-20: 180 144 193;
+  --chart-21: 118 173 178;
+  --chart-22: 205 150 132;
+  --chart-23: 190 199 228;
+  --chart-24: 207 170 201;
+  --chart-neutral: 138 146 160;
+  --chart-grid: 38 43 53;
   --chart-axis: 128 138 155;
 }
 

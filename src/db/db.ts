@@ -97,7 +97,33 @@ export class VyayaMitraDB extends Dexie {
   }
 }
 
-export const db = new VyayaMitraDB();
+export const PERSONAL_DB_NAME = 'vyayamitra';
+/** Sample-data mode uses a completely separate database so personal data is never read, written or mixed. */
+export const SAMPLE_DB_NAME = 'VyayaMitraDB-sample';
+export const SAMPLE_FLAG = 'vm-sample';
+
+export function readSampleFlag(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(SAMPLE_FLAG) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The active database. It is a live binding: every module reads `db` at call time, so
+ * `switchDatabase` (used only by sample mode, which reloads the app right after) re-points them all.
+ */
+export let db = new VyayaMitraDB(readSampleFlag() ? SAMPLE_DB_NAME : PERSONAL_DB_NAME);
+
+/** Close the active database (data stays on disk) and make `name` the active one. */
+export function switchDatabase(name: string): VyayaMitraDB {
+  if (db.name !== name) {
+    db.close();
+    db = new VyayaMitraDB(name);
+  }
+  return db;
+}
 
 /** Run `fn` in ONE read-write transaction spanning every table. Any throw rolls everything back. */
 export function writeAll<T>(fn: () => Promise<T>): Promise<T> {

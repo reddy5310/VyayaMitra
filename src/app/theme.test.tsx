@@ -48,7 +48,7 @@ const metaColors = () => Array.from(document.querySelectorAll<HTMLMetaElement>('
 beforeEach(() => {
   localStorage.clear();
   document.head.innerHTML =
-    '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#111722" media="(prefers-color-scheme: dark)">';
+    '<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#13161c" media="(prefers-color-scheme: dark)">';
   html().removeAttribute('data-theme');
 });
 afterEach(() => localStorage.clear());
@@ -90,7 +90,7 @@ describe('ThemeProvider', () => {
     await userEvent.click(screen.getByText('dark'));
     expect(localStorage.getItem('vm-theme')).toBe('dark');
     expect(html().getAttribute('data-theme')).toBe('dark');
-    expect(new Set(metaColors())).toEqual(new Set(['#111722']));
+    expect(new Set(metaColors())).toEqual(new Set(['#13161c']));
     await userEvent.click(screen.getByText('light'));
     expect(localStorage.getItem('vm-theme')).toBe('light');
     expect(new Set(metaColors())).toEqual(new Set(['#ffffff']));

@@ -64,7 +64,7 @@ const TERMINATOR =
 /** Section headings on card statements that must never be read as a wrapped description. */
 const SECTION =
   /^(domestic|international|foreign)( transactions?)?$|^(transactions?|purchases?|payments?|installments?|instalments?|cash|fees?|charges?|taxes|credits?|reversals?|refunds?|card transactions?|summary|continued|account summary|opening balance)( ?(&|and|-) ?(installments?|instalments?|charges?|fees?|credits?|reversals?|emis?|cash|payments?|purchases?))*( details| summary)?( for .*)?$|^(primary|add-?on) card|interest rate|rate applicable|p\.m\.|p\.a\./i;
-/** A dated line that is really a summary row ("15SEP NET OUTSTANDING BALANCE 506,515.57"), never a transaction. */
+/** A dated line that is really a summary row ("15SEP NET OUTSTANDING BALANCE 53,209.33"), never a transaction. */
 export const SUMMARY_ROW = /^(net )?(outstanding|closing|opening) balance|^total (purchase|cash|balance|outstanding|amount|payment|due|credit|debit)|^(minimum|credit limit|available (credit|limit)|statement (date|period)|previous balance|payment due)/i;
 const END_OF_STATEMENT = /end of (the )?statement/i;
 const PERIOD_BANNER = /statement period|billing period|period\s*:/i;
@@ -239,6 +239,11 @@ function classify(line: LayoutLine, model: PageModel, ctx: BuildCtx): PLine {
     if (col && MONEY_ROLES.includes(col.role)) continue;
     base.textItems.push({ item, role });
   }
+  // A date that is nowhere near the table's date column (a due-date box, a period banner) does not make
+  // the line a transaction.
+  if (dateCol && base.dates.length > 0 && !base.dates.some((d) => overlap(d.item.x0, d.item.x1, dateCol.x0 - 15, dateCol.x1 + 15) > 0)) {
+    base.dates = [];
+  }
   void valueCol;
   return base;
 }
@@ -412,6 +417,7 @@ export function buildRows(doc: LayoutDoc, modelFor: (page: number) => PageModel 
       const last = l.textItems[l.textItems.length - 1].item;
       const inZone =
         first.x0 >= s.descLo - 4 &&
+        (s.descLo === Number.NEGATIVE_INFINITY || first.x0 <= s.descLo + 40) &&
         (s.model.descHi === Number.POSITIVE_INFINITY || last.x1 <= s.model.descHi + 12) &&
         l.textItems.every((t) => t.role === 'description' || t.role === null || t.role === 'reference');
       if (!inZone) l.kind = 'X';

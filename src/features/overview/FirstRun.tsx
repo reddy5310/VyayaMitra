@@ -1,5 +1,5 @@
 import { FileText, LineChart, Lock, PiggyBank, ShieldCheck } from 'lucide-react';
-import { Card } from '@/ui';
+import { Button, Card } from '@/ui';
 import { ROUTES } from '@/app/routes';
 import { LinkButton } from './LinkButton';
 
@@ -13,7 +13,7 @@ const POINTS = [
 const BANKS = ['ICICI savings', 'ICICI credit card', 'DBS savings'];
 
 /** Shown until the first statement is imported. */
-export function FirstRun() {
+export function FirstRun({ onSample, sampleBusy }: { onSample?: () => void; sampleBusy?: boolean }) {
   return (
     <div className="space-y-4">
       <Card className="text-center sm:py-8">
@@ -28,6 +28,14 @@ export function FirstRun() {
           <LinkButton to={ROUTES.import} variant="primary" icon={<FileText className="h-4 w-4" aria-hidden />}>
             Import your first statement
           </LinkButton>
+          {onSample && (
+            <div className="mt-2">
+              <Button variant="ghost" loading={sampleBusy} onClick={onSample}>
+                Explore sample data
+              </Button>
+              <p className="text-xs text-fg-subtle">Invented numbers, so you can look around first. You can clear them any time.</p>
+            </div>
+          )}
         </div>
       </Card>
 

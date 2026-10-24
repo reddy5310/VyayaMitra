@@ -7,17 +7,13 @@ import { deleteBudget } from '@/db/actions';
 import { useBudgets, useLedger } from '@/db/hooks';
 import { usePeriod } from '@/app/period';
 import { activityLink } from '@/app/routes';
-import { budgetStatuses, categoryBaselines, dataRange, type BudgetStatus } from '@/engine/analytics';
-import { addMonths, formatMonth, monthKey, todayIso } from '@/lib/dates';
-import { Badge, Button, Card, CategoryIcon, EmptyState, IconButton, Money, Notice, ProgressBar, useToast, type Tone } from '@/ui';
+import { budgetStatuses, categoryBaselines, dataRange, dataStatus, type BudgetStatus } from '@/engine/analytics';
+import { addMonths, formatDate, formatMonth, monthKey, todayIso } from '@/lib/dates';
+import { Badge, Button, Card, CategoryIcon, EmptyState, IconButton, Money, Notice, useToast, type Tone } from '@/ui';
 import { BudgetSheet } from './BudgetSheet';
+import { Meter } from './Meter';
 import { ConfirmSheet, ListSkeleton } from './planUi';
 
-const STATE_LABEL: Record<BudgetStatus['state'], { label: string; tone: Tone }> = {
-  ok: { label: 'On track', tone: 'positive' },
-  watch: { label: 'Watch', tone: 'warning' },
-  over: { label: 'Over budget', tone: 'negative' },
-};
 
 export function BudgetsTab() {
   const { ready, accounts, statements, transactions, customCategories } = useLedger();
@@ -27,6 +23,7 @@ export function BudgetsTab() {
   const today = useMemo(() => todayIso(), []);
   const thisMonth = monthKey(today);
 
+  const dataThrough = useMemo(() => (ready ? dataStatus(accounts, statements, transactions, today).dataThrough : null), [ready, accounts, statements, transactions, today]);
   const range = useMemo(() => (ready ? dataRange(transactions) : null), [ready, transactions]);
   const latestDataMonth = range ? monthKey(range.max) : thisMonth;
   const firstMonth = range ? monthKey(range.min) : thisMonth;
@@ -100,6 +97,7 @@ export function BudgetsTab() {
                 key={s.budget.id}
                 status={s}
                 isCurrent={isCurrent}
+                dataThrough={dataThrough}
                 customCategories={customCategories}
                 onEdit={() => setSheet({ editing: s.budget })}
                 onDelete={() => setDeleting(s.budget)}
@@ -141,20 +139,22 @@ export function BudgetsTab() {
 function BudgetRow({
   status,
   isCurrent,
+  dataThrough,
   customCategories,
   onEdit,
   onDelete,
 }: {
   status: BudgetStatus;
   isCurrent: boolean;
+  dataThrough: string | null;
   customCategories: Parameters<typeof categoryName>[1];
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const { budget, spent, remaining, usage, expectedByToday, state, coverageComplete, txnIds } = status;
+  const { budget, spent, remaining, usage, expectedByToday, coverageComplete, txnIds } = status;
   const name = categoryName(budget.category, customCategories);
-  const badge = STATE_LABEL[state];
-  const paceFraction = isCurrent && expectedByToday !== undefined && budget.monthlyLimit > 0 ? Math.min(1, expectedByToday / budget.monthlyLimit) : null;
+  const badge = paceBadge(status, isCurrent);
+  const paceFraction = isCurrent && expectedByToday !== undefined && budget.monthlyLimit > 0 ? expectedByToday / budget.monthlyLimit : null;
   return (
     <li>
       <Card className="h-full">
@@ -166,16 +166,17 @@ function BudgetRow({
               <Badge tone={badge.tone}>{badge.label}</Badge>
             </div>
             <p className="text-sm text-fg-muted">
-              <Money value={spent} whole className="font-medium text-fg" /> of <Money value={budget.monthlyLimit} whole /> ·{' '}
+              <Money value={spent} whole className="font-medium text-fg" /> of <Money value={budget.monthlyLimit} whole /> used ·{' '}
               {remaining >= 0 ? (
                 <>
-                  <Money value={remaining} whole /> left
+                  <Money value={remaining} whole /> remaining
                 </>
               ) : (
                 <span className="text-negative">
                   <Money value={-remaining} whole /> over
                 </span>
               )}
+              {dataThrough && <> · data through {formatDate(dataThrough, { short: true })}</>}
             </p>
           </div>
           <div className="-mr-2 -mt-1 flex shrink-0">
@@ -188,19 +189,10 @@ function BudgetRow({
           </div>
         </div>
 
-        <div className="relative mt-3">
-          <ProgressBar value={usage} tone={badge.tone} label={`${name} budget used`} />
-          {paceFraction !== null && (
-            <span
-              aria-hidden
-              className="absolute -top-1 bottom-[-4px] w-0.5 rounded bg-fg"
-              style={{ left: `${paceFraction * 100}%` }}
-            />
-          )}
-        </div>
+        <Meter className="mt-3" value={usage} marker={paceFraction} tone={badge.tone} label={`${name} budget used`} />
         {paceFraction !== null && expectedByToday !== undefined && (
           <p className="mt-1.5 text-xs text-fg-muted">
-            Pace marker: spending evenly, you would be at <Money value={expectedByToday} whole /> by today.
+            The marker shows where an even pace would be today: <Money value={expectedByToday} whole />.
           </p>
         )}
 
@@ -221,4 +213,18 @@ function BudgetRow({
       </Card>
     </li>
   );
+}
+
+/**
+ * Status comes from pace, not from a fixed percentage: 80% used on day 28 is fine, 40% used on
+ * day 3 is not. Past months are judged on the final total.
+ */
+function paceBadge(s: BudgetStatus, isCurrent: boolean): { label: string; tone: Tone } {
+  if (s.spent > s.budget.monthlyLimit) return { label: 'Over budget', tone: 'negative' };
+  if (isCurrent && s.expectedByToday !== undefined) {
+    return s.spent > s.expectedByToday * 1.1 && s.spent - s.expectedByToday > 0
+      ? { label: 'Ahead of pace', tone: 'warning' }
+      : { label: 'On pace', tone: 'positive' };
+  }
+  return { label: 'Within budget', tone: 'positive' };
 }

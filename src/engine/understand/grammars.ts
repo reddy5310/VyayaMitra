@@ -264,11 +264,12 @@ const GATEWAYS: Array<[RegExp, string]> = [
 ];
 
 /** True when a descriptor starts with a gateway tag such as "RAZ*" or "PAYU*". */
-export const GATEWAY_PREFIX = /^(?:RAZORPAY|RAZ|RZP|CASHFREE|CAS|CF|PAYU|PYU|PU|CCAVENUE|CCAV|BILLDESK|BD|PAYTM|PTM|EASEBUZZ|EAZ|PHONEPE|JUSPAY|INSTAMOJO|PAYPAL|PP|PAY)\s*\*\s*\S/i;
+export const GATEWAY_PREFIX = /^(?:(?:IAP|ECOM|POS)\s+)?(?:RAZORPAY|RAZ|RZP|CASHFREE|CAS|CF|PAYU|PYU|PU|CCAVENUE|CCAV|BILLDESK|BD|PAYTM|PTM|EASEBUZZ|EAZ|PHONEPE|JUSPAY|INSTAMOJO|PAYPAL|PP|PAY)\s*\*\s*\S/i;
 
 /** "RAZ*SOME SHOP" → { text: "SOME SHOP", gateway: "Razorpay" }. */
 export function stripGateway(text: string): { text: string; gateway?: string } {
-  const s = squish(text);
+  // card networks sometimes prepend a channel tag: "IAP CAS*SHOP" (in-app purchase), "ECOM RAZ*SHOP"
+  const s = squish(text).replace(/^(?:IAP|ECOM|POS)\s+(?=[A-Z]{2,9}\s*\*)/i, '');
   for (const [re, name] of GATEWAYS) {
     if (re.test(s)) {
       const rest = squish(s.replace(re, ''));

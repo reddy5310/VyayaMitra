@@ -18,6 +18,9 @@ const PlanPage = lazy(() => import('@/features/plan/PlanPage'));
 const SettingsPage = lazy(() => import('@/features/settings/SettingsPage'));
 const ReportPage = lazy(() => import('@/features/reports/ReportPage'));
 const LearningPage = lazy(() => import('@/features/learning/LearningPage'));
+const ExplorePage = lazy(() => import('@/features/explore/ExplorePage'));
+const AccountsPage = lazy(() => import('@/features/accounts/AccountsPage'));
+const AccountDetailPage = lazy(() => import('@/features/accounts/AccountDetailPage'));
 
 function PageFallback() {
   return (
@@ -59,6 +62,9 @@ export function AppRoutes() {
         <Route path={ROUTES.settings} element={<Screen page={SettingsPage} />} />
         <Route path={ROUTES.report} element={<Screen page={ReportPage} />} />
         <Route path={ROUTES.learning} element={<Screen page={LearningPage} />} />
+        <Route path={ROUTES.explore} element={<Screen page={ExplorePage} />} />
+        <Route path={ROUTES.accounts} element={<Screen page={AccountsPage} />} />
+        <Route path={`${ROUTES.accounts}/:accountId`} element={<Screen page={AccountDetailPage} />} />
         <Route path="*" element={<Navigate to={ROUTES.overview} replace />} />
       </Route>
     </Routes>

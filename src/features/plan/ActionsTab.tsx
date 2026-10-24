@@ -88,26 +88,26 @@ export function ActionsTab() {
           <h2 className="sr-only">Saving totals</h2>
           <dl className="grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl bg-info-soft px-3 py-2.5 text-info">
-              <dt className="text-sm font-medium">Estimated, if you hit every target</dt>
+              <dt className="text-sm font-medium">Potential, if every target is met</dt>
               <dd className="text-xl font-semibold">
                 <Money value={estimatedTotal} whole /> <span className="text-sm font-normal">a month</span>
               </dd>
-              <dd className="text-xs opacity-90">A plan, not money saved yet.</dd>
+              <dd className="text-xs opacity-90">A possibility, not money saved.</dd>
             </div>
-            <div className="rounded-xl bg-positive-soft px-3 py-2.5 text-positive">
-              <dt className="text-sm font-medium">Achieved, from complete months</dt>
-              <dd className="text-xl font-semibold">
+            <div className="rounded-xl bg-surface-2 px-3 py-2.5">
+              <dt className="text-sm font-medium text-fg-muted">Observed in complete months</dt>
+              <dd className="text-xl font-semibold text-fg">
                 {achievedList.length > 0 ? (
                   <>
-                    <Money value={achievedTotal} whole /> <span className="text-sm font-normal">a month</span>
+                    <Money value={achievedTotal} whole /> <span className="text-sm font-normal">a month lower</span>
                   </>
                 ) : (
                   '—'
                 )}
               </dd>
-              <dd className="text-xs opacity-90">
+              <dd className="text-xs text-fg-muted">
                 {achievedList.length > 0
-                  ? `Measured on ${achievedList.length} of ${active.length} actions.`
+                  ? `Measured on ${achievedList.length} of ${active.length} actions. Statements show the change, not what caused it.`
                   : 'Waiting for a full month of data.'}
               </dd>
             </div>
@@ -191,29 +191,36 @@ function ActionItem({
         {a.category && <> · {categoryName(a.category, customCategories)}</>} · from {formatMonth(a.startMonth)}
       </p>
 
-      <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+      <dl className="mt-2 grid gap-2 sm:grid-cols-3">
         <div className="rounded-xl bg-info-soft px-3 py-2 text-info">
-          <dt className="text-xs font-medium">Estimated</dt>
-          <dd className="text-sm">
-            Aim: <Money value={a.targetMonthly} whole /> a month, down from <Money value={a.baselineMonthly} whole />
-          </dd>
+          <dt className="text-xs font-medium">Potential</dt>
           <dd className="text-sm font-medium">
-            About <Money value={est} whole /> a month if you hit it
+            Up to <Money value={est} whole /> a month
+          </dd>
+          <dd className="text-xs opacity-90">If spending reaches the target.</dd>
+        </div>
+        <div className="rounded-xl bg-surface-2 px-3 py-2">
+          <dt className="text-xs font-medium text-fg-muted">Planned</dt>
+          <dd className="text-sm text-fg">
+            <Money value={a.targetMonthly} whole /> a month
+          </dd>
+          <dd className="text-xs text-fg-muted">
+            Down from <Money value={a.baselineMonthly} whole />
           </dd>
         </div>
         <div className="rounded-xl bg-surface-2 px-3 py-2">
-          <dt className="text-xs font-medium text-fg-muted">Achieved</dt>
+          <dt className="text-xs font-medium text-fg-muted">Observed</dt>
           {achieved === null ? (
             <dd className="text-sm text-fg-muted">Waiting for a full month of data</dd>
           ) : (
             <>
-              <dd className={achieved > 0 ? 'text-sm font-medium text-positive' : 'text-sm font-medium text-fg'}>
+              <dd className="text-sm font-medium text-fg">
                 {achieved > 0 ? (
                   <>
-                    <Money value={achieved} whole /> a month saved
+                    <Money value={achieved} whole /> a month lower
                   </>
                 ) : (
-                  'Nothing saved yet'
+                  'No drop so far'
                 )}
               </dd>
               <dd className="text-xs text-fg-muted">
@@ -222,7 +229,7 @@ function ActionItem({
                     Now <Money value={outcome.actualMonthly} whole /> a month ·{' '}
                   </>
                 )}
-                {outcome?.monthsEvaluated.length} complete {outcome?.monthsEvaluated.length === 1 ? 'month' : 'months'} measured
+                {outcome?.monthsEvaluated.length} complete {outcome?.monthsEvaluated.length === 1 ? 'month' : 'months'}. Statements show the change, not why.
               </dd>
             </>
           )}

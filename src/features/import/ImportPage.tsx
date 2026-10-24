@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
 import { monthEnd, monthStart } from '@/lib/dates';
@@ -18,6 +18,7 @@ import {
 import type { ParseProgress, StatementFile } from '@/parsing';
 import { Button, Card, Spinner, cn } from '@/ui';
 import { AccountStep, type AccountTarget } from './AccountStep';
+import { BatchList, BatchSummary } from './BatchPanels';
 import { ChooseFileStep } from './ChooseFileStep';
 import { OcrOffer, OcrProgress } from './OcrSteps';
 import { PasswordStep } from './PasswordStep';
@@ -26,6 +27,7 @@ import { ReviewStep } from './ReviewStep';
 import { TeachStep } from './TeachStep';
 import { describeImportError, isIncorrectPassword, isPasswordRequired, isScannedPdf, isUnsupported, type ErrorView } from './describeError';
 import { toStatementFile, validateFile } from './files';
+import { EMPTY_TOTALS, addToTotals, progressText, reconText, type BatchItem, type BatchTotals, type QueueItem } from './batch';
 import type { Via } from './importTypes';
 import type { TeachCache } from './teachForm';
 
@@ -84,7 +86,20 @@ export default function ImportPage() {
   const [canTeach, setCanTeach] = useState(false);
   const [problems, setProblems] = useState<string[]>([]);
   const [commitError, setCommitError] = useState<string | null>(null);
-  const [queue, setQueue] = useState<File[]>([]);
+  const [queue, setQueueState] = useState<QueueItem[]>([]);
+  const queueRef = useRef<QueueItem[]>([]);
+  const setQueue = useCallback((q: QueueItem[]) => {
+    queueRef.current = q;
+    setQueueState(q);
+  }, []);
+  const [batch, setBatch] = useState<BatchItem[]>([]);
+  const [totals, setTotals] = useState<BatchTotals>(EMPTY_TOTALS);
+  const currentKey = useRef(0);
+  const advanceRef = useRef<() => void>(() => {});
+  const mark = useCallback(
+    (key: number, patch: Partial<BatchItem>) => setBatch((b) => b.map((i) => (i.key === key ? { ...i, ...patch } : i))),
+    [],
+  );
   const [teachCache, setTeachCache] = useState<TeachCache | null>(null);
   /** Incremented on every start/cancel so a slow parse that finishes late cannot resurrect a cancelled import. */
   const run = useRef(0);
@@ -109,23 +124,25 @@ export default function ImportPage() {
     setProblems([]);
     setCommitError(null);
     setQueue([]);
+    setBatch([]);
+    setTotals(EMPTY_TOTALS);
     setTeachCache(null);
-  }, [forgetFile]);
+  }, [forgetFile, setQueue]);
 
   /** Parse and stage. Throws the parsing errors; writes nothing. */
   const prepare = useCallback(async (file: StatementFile, password: string | undefined, id: number, mode: PrepareMode = {}) => {
     const opts: PrepareOptions = {};
     if (password !== undefined) opts.password = password;
-    if (mode.ocr) {
-      opts.ocr = true;
-      opts.onProgress = (progress) => {
-        if (id === run.current) setPhase((cur) => (cur.name === 'ocr' ? { ...cur, progress } : cur));
-      };
-    }
+    if (mode.ocr) opts.ocr = true;
+    opts.onProgress = (progress) => {
+      if (id !== run.current) return;
+      mark(currentKey.current, { text: progressText(progress) });
+      if (mode.ocr) setPhase((cur) => (cur.name === 'ocr' ? { ...cur, progress } : cur));
+    };
     if (mode.template) opts.template = mode.template.draft;
     if (mode.accountId) opts.accountId = mode.accountId;
     return prepareImport(file, opts);
-  }, []);
+  }, [mark]);
 
   const attempt = useCallback(
     async (file: StatementFile, password: string | undefined, id: number, mode: PrepareMode = {}) => {
@@ -134,32 +151,45 @@ export default function ImportPage() {
       try {
         const preview = await prepare(file, password, id, mode);
         if (id !== run.current) return;
+        mark(currentKey.current, { status: 'ready', text: reconText(preview) });
         setPhase({ name: 'account', preview, via: { ocr: Boolean(mode.ocr), taught: null } });
       } catch (e) {
         if (id !== run.current) return;
         if (isPasswordRequired(e) || isIncorrectPassword(e)) {
           passwordRef.current = undefined;
+          mark(currentKey.current, { status: 'password', text: isIncorrectPassword(e) ? 'That password did not open it' : 'Enter the password to open it' });
           setPhase({ name: 'password', file, wrong: isIncorrectPassword(e), busy: false });
           return;
         }
         if (isScannedPdf(e) && !mode.ocr) {
+          mark(currentKey.current, { status: 'scanned', text: 'No text in this PDF. OCR can read it on this device.' });
           setPhase({ name: 'ocr_offer', file });
           return;
         }
         // An unreadable layout can be taught; keep the file in memory for that. Anything else drops it.
+        const view = describeImportError(e);
+        mark(currentKey.current, { status: 'failed', text: view.title });
+        if (queueRef.current.length > 0) {
+          // More files are waiting: record this one as failed and carry on with the next.
+          forgetFile();
+          advanceRef.current();
+          return;
+        }
         const teachable = isUnsupported(e);
         if (!teachable) forgetFile();
         setCanTeach(teachable);
-        setError(describeImportError(e));
+        setError(view);
         setPhase({ name: 'choose' });
       }
     },
-    [prepare, forgetFile],
+    [prepare, forgetFile, mark],
   );
 
   const startFile = useCallback(
-    async (file: File) => {
+    async ({ file, key }: QueueItem) => {
       const id = ++run.current;
+      currentKey.current = key;
+      mark(key, { status: 'reading', text: 'Opening the file' });
       forgetFile();
       setError(null);
       setCanTeach(false);
@@ -171,14 +201,20 @@ export default function ImportPage() {
         statementFile = await toStatementFile(file);
       } catch (e) {
         if (id !== run.current) return;
-        setError(describeImportError(e));
+        const view = describeImportError(e);
+        mark(key, { status: 'failed', text: view.title });
+        if (queueRef.current.length > 0) {
+          advanceRef.current();
+          return;
+        }
+        setError(view);
         setPhase({ name: 'choose' });
         return;
       }
       if (id !== run.current) return;
       await attempt(statementFile, undefined, id);
     },
-    [attempt, forgetFile],
+    [attempt, forgetFile, mark],
   );
 
   const onFiles = useCallback(
@@ -202,10 +238,39 @@ export default function ImportPage() {
       }
       setError(null);
       setProblems(bad);
-      setQueue(good.slice(1));
-      void startFile(good[0]);
+      const items = good.map((file, i) => ({ file, key: Date.now() + i }));
+      setBatch(items.map((q) => ({ key: q.key, name: q.file.name, status: 'queued' as const })));
+      setTotals(EMPTY_TOTALS);
+      setQueue(items.slice(1));
+      void startFile(items[0]);
     },
-    [startFile],
+    [startFile, setQueue],
+  );
+
+  /** Move on to the next waiting file, or back to the file picker when none is left. */
+  const advance = useCallback(() => {
+    const [next, ...rest] = queueRef.current;
+    setQueue(rest);
+    setError(null);
+    setProblems([]);
+    if (next) void startFile(next);
+    else setPhase({ name: 'choose' });
+  }, [startFile, setQueue]);
+  useEffect(() => {
+    advanceRef.current = advance;
+  }, [advance]);
+
+  /** Leave this file out of the batch without cancelling the others. */
+  const skipFile = useCallback(
+    (key: number) => {
+      if (key !== currentKey.current) return;
+      run.current += 1;
+      forgetFile();
+      setTeachCache(null);
+      mark(key, { status: 'skipped', text: 'Skipped by you. Nothing was saved.' });
+      advance();
+    },
+    [forgetFile, mark, advance],
   );
 
   const submitPassword = useCallback(
@@ -214,9 +279,10 @@ export default function ImportPage() {
       const id = ++run.current;
       const { file } = phase;
       setPhase({ ...phase, busy: true });
+      mark(currentKey.current, { status: 'reading', text: 'Opening with your password' });
       void attempt(file, password, id);
     },
-    [phase, attempt],
+    [phase, attempt, mark],
   );
 
   const startOcr = useCallback(() => {
@@ -224,8 +290,9 @@ export default function ImportPage() {
     const id = ++run.current;
     const { file } = phase;
     setPhase({ name: 'ocr', file, progress: null });
+    mark(currentKey.current, { status: 'reading', text: 'Reading page images' });
     void attempt(file, passwordRef.current, id, { ocr: true });
-  }, [phase, attempt]);
+  }, [phase, attempt, mark]);
 
   // ── teach this format ──────────────────────────────────────────────────────
 
@@ -291,6 +358,8 @@ export default function ImportPage() {
       setPhase({ name: 'review', preview, target, committing: true, via });
       try {
         const result = await commitImport(preview, choices);
+        mark(currentKey.current, { status: 'imported', text: `${result.inserted} added${result.skippedDuplicates ? `, ${result.skippedDuplicates} duplicates skipped` : ''}` });
+        setTotals((t) => addToTotals(t, preview, choices, result));
         // Show the imported statement's month everywhere, so "Review N transactions" finds the new rows.
         const month = landingMonth(preview);
         if (month) setCustom(monthStart(month), monthEnd(month));
@@ -316,19 +385,17 @@ export default function ImportPage() {
         setPhase({ name: 'review', preview, target, committing: false, via });
       }
     },
-    [phase, setCustom, forgetFile],
+    [phase, setCustom, forgetFile, mark],
   );
 
-  const importAnother = useCallback(() => {
-    const [next, ...rest] = queue;
-    setQueue(rest);
-    setError(null);
-    setProblems([]);
-    if (next) void startFile(next);
-    else setPhase({ name: 'choose' });
-  }, [queue, startFile]);
+  const importAnother = advance;
 
   const current = stepIndex(phase);
+  const batchFinished =
+    batch.length > 1 &&
+    queue.length === 0 &&
+    (phase.name === 'done' || phase.name === 'choose') &&
+    batch.every((i) => i.status === 'imported' || i.status === 'failed' || i.status === 'skipped');
   const teachFile = fileRef.current;
 
   return (
@@ -350,11 +417,7 @@ export default function ImportPage() {
         ))}
       </ol>
 
-      {queue.length > 0 && phase.name !== 'choose' && (
-        <p className="text-sm text-fg-muted">
-          {queue.length} more file{queue.length === 1 ? '' : 's'} waiting after this one.
-        </p>
-      )}
+      {batch.length > 1 && <BatchList items={batch} onSkip={phase.name === 'review' && phase.committing ? undefined : skipFile} />}
 
       {phase.name === 'choose' && (
         <ChooseFileStep error={error} problems={problems} onFiles={onFiles} onTeach={canTeach && teachFile ? startTeach : undefined} />
@@ -411,6 +474,8 @@ export default function ImportPage() {
       {phase.name === 'done' && (
         <ResultStep result={phase.result} fileName={phase.fileName} waiting={queue.length} format={phase.format} onAnother={importAnother} />
       )}
+
+      {batchFinished && <BatchSummary items={batch} totals={totals} />}
     </div>
   );
 }

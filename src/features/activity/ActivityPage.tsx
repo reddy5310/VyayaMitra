@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Download, SearchX } from 'lucide-react';
 import { usePageChrome } from '@/app/chrome';
@@ -10,10 +10,33 @@ import { Button, Card, EmptyState, Money, Notice, SegmentedControl, Skeleton, us
 import { csvFilename, downloadCsv, transactionsToCsv } from '../reports/csv';
 import { ActivityFilters } from './ActivityFilters';
 import { ReviewQueue } from './ReviewQueue';
+import { ShortcutHelp } from './ShortcutHelp';
 import { TransactionDetail } from './TransactionDetail';
 import { TransactionList } from './TransactionList';
 import { activeFilterCount, buildQuery, useActivityFilters } from './useActivityFilters';
+import { shortcutsBlocked, useIsDesktop } from './useIsDesktop';
 import { useSuggest } from './useSuggest';
+
+interface SavedView {
+  y: number;
+  visible: number;
+}
+const storageKey = (k: string) => `vm-activity-view:${k}`;
+function readSaved(k: string): SavedView | null {
+  try {
+    const raw = sessionStorage.getItem(storageKey(k));
+    return raw ? (JSON.parse(raw) as SavedView) : null;
+  } catch {
+    return null;
+  }
+}
+function writeSaved(k: string, v: SavedView) {
+  try {
+    sessionStorage.setItem(storageKey(k), JSON.stringify(v));
+  } catch {
+    /* private mode: restoring is a convenience only */
+  }
+}
 
 export default function ActivityPage() {
   const { toast } = useToast();
@@ -23,6 +46,9 @@ export default function ActivityPage() {
   const suggest = useSuggest(ledger.accounts, ledger.customCategories);
   const { filters, filterKey, update, clearAll } = useActivityFilters();
   const txnId = params.get('txn') ?? undefined;
+  const isDesktop = useIsDesktop();
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [helpSignal, setHelpSignal] = useState(0);
 
   // Deep link with review=1 opens the focused queue; the view can then be switched to the plain list.
   const [reviewView, setReviewView] = useState<'queue' | 'list'>(filters.review ? 'queue' : 'list');
@@ -96,6 +122,47 @@ export default function ActivityPage() {
   const hasFilters = activeFilterCount(filters) > 0 || filters.ids.length > 0;
   const showQueue = filters.review && reviewView === 'queue';
 
+  // Back returns to the same filters (they live in the URL) and the same scroll position and list length.
+  const viewKey = `${filterKey}|${period.start}|${period.end}`;
+  const saved = useMemo(() => readSaved(viewKey), [viewKey]);
+  const visibleRef = useRef(saved?.visible ?? 0);
+  const restored = useRef<string | null>(null);
+  const listReady = ledger.ready && filtered.length > 0;
+  useEffect(() => {
+    if (!listReady || restored.current === viewKey) return;
+    restored.current = viewKey;
+    if (!saved || saved.y <= 0) return;
+    const t = setTimeout(() => window.scrollTo?.(0, saved.y), 60); // after the shell's own scroll-to-top
+    return () => clearTimeout(t);
+  }, [listReady, viewKey, saved]);
+  useEffect(() => {
+    const save = () => writeSaved(viewKey, { y: window.scrollY, visible: visibleRef.current });
+    window.addEventListener('pagehide', save);
+    return () => {
+      save();
+      window.removeEventListener('pagehide', save);
+    };
+  }, [viewKey]);
+
+  // Page-level shortcuts; j / k / Enter live with the list that owns the rows.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isDesktop && txnId && !shortcutsBlocked(e)) {
+        closeTxn();
+        return;
+      }
+      if (shortcutsBlocked(e)) return;
+      if (e.key === '/') {
+        e.preventDefault();
+        searchRef.current?.focus();
+      } else if (e.key === '?') {
+        setHelpSignal((n) => n + 1);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isDesktop, txnId, closeTxn]);
+
   usePageChrome({
     title: 'Activity',
     showPeriod: true,
@@ -114,8 +181,11 @@ export default function ActivityPage() {
   });
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-3 px-4 py-4">
-
+    <div className="mx-auto w-full max-w-3xl px-4 py-4 lg:max-w-6xl">
+      <p className="sr-only">Keyboard shortcuts: j and k move between transactions, Enter opens one, slash searches, Escape closes details.</p>
+      <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_26rem] lg:items-start lg:gap-5">
+      <div className="min-w-0 space-y-3">
+      <ShortcutHelp openSignal={helpSignal} />
       {filters.ids.length > 0 && (
         <Notice
           tone="info"
@@ -138,6 +208,7 @@ export default function ActivityPage() {
         customCategories={ledger.customCategories}
         onChange={update}
         onClearAll={clearAll}
+        searchRef={searchRef}
       />
 
       <section aria-label="Results" aria-live="polite" className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl bg-surface-2 px-3 py-2 text-sm">
@@ -210,15 +281,23 @@ export default function ActivityPage() {
         </Card>
       ) : (
         <TransactionList
-          key={`${filterKey}|${period.start}|${period.end}`}
+          key={viewKey}
           txns={filtered}
+          activeId={txnId}
+          initialVisible={saved?.visible}
+          onVisibleChange={(v) => {
+            visibleRef.current = v;
+          }}
           accountNames={accountNames}
           customCategories={ledger.customCategories}
           onOpen={openTxn}
         />
       )}
 
-      <TransactionDetail txnId={txnId} onClose={closeTxn} onOpenTxn={openTxn} />
+      </div>
+      {isDesktop && <TransactionDetail pane txnId={txnId} onClose={closeTxn} onOpenTxn={openTxn} />}
+      </div>
+      {!isDesktop && <TransactionDetail txnId={txnId} onClose={closeTxn} onOpenTxn={openTxn} />}
     </div>
   );
 }

@@ -20,6 +20,8 @@ import {
   setRecurringDecision,
   setTransactionCategory,
   setTransactionKind,
+  setTransactionsCategory,
+  setTransactionsKind,
   setTransactionNote,
   updateAccount,
   updateGoal,
@@ -391,5 +393,50 @@ describe('storage', () => {
     } finally {
       if (original) Object.defineProperty(globalThis, 'navigator', original);
     }
+  });
+});
+
+describe('bulk selection', () => {
+  it('setTransactionsCategory sets user_txn on every selected row with one feedback event each', async () => {
+    await seedSwiggy();
+    const res = await setTransactionsCategory(['a', 'b', 'z', 'a', 'ghost'], 'groceries');
+    expect(res).toEqual({ updated: 3 });
+    for (const id of ['a', 'b', 'z']) {
+      expect(await db.transactions.get(id)).toMatchObject({ category: 'groceries', categorySource: 'user_txn', confidence: 1, needsReview: false, reasons: ['You set this'] });
+    }
+    expect((await db.transactions.get('c'))!.category).toBe('travel');
+    expect(await db.rules.count()).toBe(0);
+    const events = await db.feedback.toArray();
+    expect(events).toHaveLength(3);
+    expect(events.every((e) => e.action === 'category' && e.scope === 'this' && e.after.category === 'groceries')).toBe(true);
+    expect(events.find((e) => e.txnId === 'z')!.before.category).toBe('transport');
+    await expectInvalid(setTransactionsCategory([], 'groceries'), /Select/);
+    await expectInvalid(setTransactionsCategory(['a'], 'nonsense'), /category/i);
+    await expectInvalid(setTransactionsCategory(['ghost'], 'groceries'));
+  });
+
+  it('setTransactionsKind applies a user kind, resets categories sensibly and relinks once', async () => {
+    await seedSwiggy();
+    vi.mocked(linkTransactions).mockClear();
+    const res = await setTransactionsKind(['a', 'b', 'z'], 'investment');
+    expect(res.updated).toBe(3);
+    for (const id of ['a', 'b', 'z']) {
+      expect(await db.transactions.get(id)).toMatchObject({ kind: 'investment', kindSource: 'user', category: 'investments', categorySource: 'kind_default', needsReview: false });
+    }
+    expect(vi.mocked(linkTransactions)).toHaveBeenCalledTimes(1);
+    expect(await db.feedback.count()).toBe(3);
+    await expectInvalid(setTransactionsKind(['a'], 'unknown'));
+    await expectInvalid(setTransactionsKind([], 'expense'));
+  });
+
+  it('setTransactionsKind un-pairs previously linked rows', async () => {
+    await db.accounts.add(makeAccount());
+    await db.transactions.bulkAdd([
+      makeTxn({ id: 'o', rawDescription: 'XFEROUT TO SELF', amount: 500, kind: 'self_transfer', kindSource: 'match', category: 'self_transfer', categorySource: 'kind_default', linkId: 'L', linkRole: 'transfer_out', linkedTxnId: 'i' }),
+      makeTxn({ id: 'i', rawDescription: 'XFERIN FROM SELF', direction: 'credit', amount: 500, kind: 'self_transfer', kindSource: 'match', category: 'self_transfer', categorySource: 'kind_default', linkId: 'L', linkRole: 'transfer_in', linkedTxnId: 'o' }),
+    ]);
+    await setTransactionsKind(['o', 'i'], 'expense');
+    const rows = await db.transactions.toArray();
+    expect(rows.every((r) => r.kind === 'expense' && !r.linkId)).toBe(true);
   });
 });

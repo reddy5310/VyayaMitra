@@ -12,6 +12,8 @@ export function CorrectionPrompt({
   busy,
   error,
   onChoose,
+  selectedCount,
+  onChooseSelected,
   onCancel,
 }: {
   /** e.g. "Change category to Food & dining" */
@@ -21,6 +23,9 @@ export function CorrectionPrompt({
   busy: boolean;
   error?: string | null;
   onChoose: (scope: CorrectionScope) => void;
+  /** Multi-select within a group: how many rows are ticked, and the handler for "these selected". */
+  selectedCount?: number;
+  onChooseSelected?: () => void;
   onCancel: () => void;
 }) {
   const others =
@@ -30,13 +35,18 @@ export function CorrectionPrompt({
   return (
     <div role="group" aria-label="Apply this change to" className="space-y-2 rounded-xl border border-primary/40 bg-primary-soft/40 p-3">
       <p className="text-sm font-medium text-fg">{change}</p>
-      <div className="grid gap-2 sm:grid-cols-2">
+      <div className={onChooseSelected ? "grid gap-2 sm:grid-cols-3" : "grid gap-2 sm:grid-cols-2"}>
         <Button variant="outline" disabled={busy} onClick={() => onChoose('this')}>
-          Just this transaction
+          Apply to this transaction
         </Button>
+        {onChooseSelected && (
+          <Button variant="outline" disabled={busy || !selectedCount} onClick={onChooseSelected}>
+            Apply to these {selectedCount ?? 0} selected
+          </Button>
+        )}
         <Button variant="primary" disabled={busy} onClick={() => onChoose('merchant')} className="h-auto py-2">
           <span className="text-left">
-            <span className="block">Always for “{merchant}”</span>
+            <span className="block">Remember for “{merchant}”</span>
             <span className="block text-xs font-normal opacity-90">{others}</span>
           </span>
         </Button>

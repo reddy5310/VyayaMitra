@@ -7,6 +7,7 @@ import {
 } from '@/db/actions';
 import type { Transaction, TxnKind } from '@/domain/types';
 import { useToast } from '@/ui';
+import { setCategoryForSelected, setKindForSelected } from './bulk';
 import { correctionMessage } from './labels';
 
 export type PendingChange =
@@ -25,7 +26,7 @@ export function errorMessage(e: unknown): string {
 export function useCorrection(
   txn: Transaction | null | undefined,
   allTxns: readonly Transaction[],
-  onApplied?: (change: PendingChange, scope: CorrectionScope) => Promise<void> | void,
+  onApplied?: (change: PendingChange, scope: CorrectionScope | 'selected', ids?: string[]) => Promise<void> | void,
 ) {
   const { toast } = useToast();
   const [pending, setPending] = useState<PendingChange | null>(null);
@@ -75,5 +76,29 @@ export function useCorrection(
     [txn, pending, toast, onApplied],
   );
 
-  return { pending, request, cancel, apply, busy, error, otherCount };
+  /** Apply a category or type change to exactly these transactions (the group's checked rows). */
+  const applySelected = useCallback(
+    async (ids: string[]) => {
+      if (!pending || pending.type === 'merchant' || ids.length === 0) return;
+      setBusy(true);
+      setError(null);
+      try {
+        if (pending.type === 'category') await setCategoryForSelected(ids, pending.value);
+        else await setKindForSelected(ids, pending.value);
+        toast(`Updated ${ids.length} selected transaction${ids.length === 1 ? '' : 's'}`, { tone: 'success' });
+        const applied = pending;
+        setPending(null);
+        await onApplied?.(applied, 'selected', ids);
+      } catch (e) {
+        const msg = errorMessage(e);
+        setError(msg);
+        toast(msg, { tone: 'error' });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [pending, toast, onApplied],
+  );
+
+  return { pending, request, cancel, apply, applySelected, busy, error, otherCount };
 }

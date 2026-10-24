@@ -9,7 +9,8 @@ import { activityLink } from '@/app/routes';
 import { detectRecurring, isSeriesActive, upcomingCardDues, type RecurringSeries } from '@/engine/analytics';
 import { addMonths, formatDate, monthKey, todayIso } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, CategoryIcon, EmptyState, Money, Notice, useToast } from '@/ui';
-import { CardDuesList } from '@/features/overview/CardDues';
+import { buildCommitments } from '@/features/overview/commitments';
+import { CommitmentTimeline } from '@/features/overview/CommitmentTimeline';
 import { errorMessage } from './errors';
 import { ListSkeleton } from './planUi';
 
@@ -37,9 +38,9 @@ export function RecurringTab() {
     [ready, decisions, transactions, today],
   );
   // Card bills still to pay (paid ones are history, not "due soon").
-  const dues = useMemo(
-    () => (ready ? upcomingCardDues(accounts, statements, transactions, today).filter((d) => d.status !== 'paid') : []),
-    [ready, accounts, statements, transactions, today],
+  const timeline = useMemo(
+    () => (ready ? buildCommitments(upcomingCardDues(accounts, statements, transactions, today), series, accounts, today, 60) : []),
+    [ready, accounts, statements, transactions, series, today],
   );
   const suggested = series.filter((s) => s.status === 'suggested' && isSeriesActive(s, today));
   const confirmed = series.filter((s) => s.status === 'confirmed');
@@ -71,7 +72,7 @@ export function RecurringTab() {
     try {
       await createSavingAction({
         type: 'review_recurring',
-        title: `Review ${s.merchant}`,
+        title: `Cancellation requested: ${s.merchant}`,
         category: s.category,
         merchantKey: s.merchantKey,
         baselineMonthly: s.monthlyCost,
@@ -79,7 +80,7 @@ export function RecurringTab() {
         startMonth: addMonths(monthKey(today), 1),
         status: 'active',
       });
-      toast(`Review of ${s.merchant} added to your saving actions.`, { tone: 'success' });
+      toast(`Noted. We will keep watching for further ${s.merchant} payments.`, { tone: 'success' });
     } catch (e) {
       toast(errorMessage(e), { tone: 'error' });
     } finally {
@@ -89,7 +90,7 @@ export function RecurringTab() {
 
   if (!ready || decisions === undefined || actions === undefined) return <ListSkeleton />;
 
-  if (series.length === 0 && dues.length === 0) {
+  if (series.length === 0 && timeline.length === 0) {
     return (
       <Card>
         <EmptyState
@@ -103,14 +104,14 @@ export function RecurringTab() {
 
   return (
     <div className="space-y-4">
-      {dues.length > 0 && (
-        <section aria-labelledby="rec-due-soon">
+      {timeline.length > 0 && (
+        <section aria-labelledby="rec-timeline">
           <Card>
             <CardHeader
-              title={<span id="rec-due-soon">Due soon</span>}
-              subtitle="Credit-card bills from your latest statements. Paying the full amount avoids interest."
+              title={<span id="rec-timeline">Next 60 days</span>}
+              subtitle="Card bills and confirmed recurring payments, in date order."
             />
-            <CardDuesList dues={dues} accounts={accounts} />
+            <CommitmentTimeline items={timeline} />
           </Card>
         </section>
       )}
@@ -193,16 +194,16 @@ export function RecurringTab() {
                     )}
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {reviewing.has(s.merchantKey) ? (
-                        <Badge tone="info">Reviewing</Badge>
+                        <Badge tone="info">Cancellation requested</Badge>
                       ) : (
                         <Button
                           size="md"
                           variant="secondary"
                           loading={busyKey === s.merchantKey}
-                          aria-label={`Review ${s.merchant} to save`}
+                          aria-label={`Record cancellation requested for ${s.merchant}`}
                           onClick={() => reviewToSave(s)}
                         >
-                          Review to save
+                          Record cancellation requested
                         </Button>
                       )}
                       <EvidenceLink series={s} />
@@ -231,7 +232,7 @@ export function RecurringTab() {
         </details>
       )}
 
-      <Notice tone="info">Recurring payments are detected from your imported statements only, so a short history can hide some of them.</Notice>
+      <Notice tone="info">Recurring payments are detected from your imported statements only, so a short history can hide some of them. VyayaMitra cannot cancel anything for you: “Record cancellation requested” only notes that you asked, then checks whether payments stop.</Notice>
     </div>
   );
 }

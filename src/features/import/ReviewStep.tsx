@@ -5,12 +5,18 @@ import { KIND_LABELS } from '@/domain/kinds';
 import type { Account, RowWarning } from '@/domain/types';
 import type { CommitChoices, ImportPreview, PreviewRow } from '@/engine/import';
 import { formatDate } from '@/lib/dates';
-import { Badge, Button, Card, CardHeader, Money, Notice, Spinner, type Tone } from '@/ui';
+import { Badge, Button, Card, CardHeader, Money, Notice, SegmentedControl, Spinner, type Tone } from '@/ui';
 import type { AccountTarget } from './AccountStep';
 import { FormatNotices } from './FormatNotices';
 import type { Via } from './importTypes';
 
 const PAGE = 60;
+
+/** Warnings that mean the amount, direction or date may be misread, as opposed to an unsure category. */
+const AMOUNT_WARNINGS: ReadonlySet<RowWarning> = new Set<RowWarning>(['balance_break', 'ambiguous_amount', 'date_out_of_period', 'direction_from_balance']);
+const hasAmountIssue = (r: PreviewRow) => r.row.warnings.some((w) => AMOUNT_WARNINGS.has(w));
+
+type RowFilter = 'all' | 'amounts' | 'categories';
 
 const WARNING_LABELS: Record<RowWarning, { label: string; tone: Tone }> = {
   balance_break: { label: 'Balance break', tone: 'warning' },
@@ -114,6 +120,7 @@ export function ReviewStep({
   const [excluded, setExcluded] = useState<ReadonlySet<number>>(new Set());
   const [visible, setVisible] = useState(PAGE);
   const [showSkipped, setShowSkipped] = useState(false);
+  const [rowFilter, setRowFilter] = useState<RowFilter>('all');
 
   const replacing = mode === 'replace' && Boolean(preview.alreadyImported);
   /** In "add" mode a duplicate is always skipped by the importer, so it is locked off. */
@@ -148,7 +155,10 @@ export function ReviewStep({
     );
   }
 
-  const shown = preview.rows.slice(0, visible);
+  const amountRows = useMemo(() => preview.rows.filter(hasAmountIssue), [preview.rows]);
+  const categoryRows = useMemo(() => preview.rows.filter((r) => !hasAmountIssue(r) && r.understanding.needsReview), [preview.rows]);
+  const listed = rowFilter === 'amounts' ? amountRows : rowFilter === 'categories' ? categoryRows : preview.rows;
+  const shown = listed.slice(0, visible);
   const actionLabel = replacing ? `Replace and import ${includedCount}` : `Import ${includedCount} transaction${includedCount === 1 ? '' : 's'}`;
 
   return (
@@ -282,6 +292,25 @@ export function ReviewStep({
             </Button>
           </div>
         </div>
+        {(amountRows.length > 0 || categoryRows.length > 0) && (
+          <div className="mb-2 space-y-1">
+            <SegmentedControl<RowFilter>
+              label="Which rows to show"
+              value={rowFilter}
+              onChange={(v) => {
+                setRowFilter(v);
+                setVisible(PAGE);
+              }}
+              options={[
+                { value: 'all', label: `All (${preview.rows.length})` },
+                { value: 'amounts', label: `Check amounts (${amountRows.length})` },
+                { value: 'categories', label: `Confirm categories (${categoryRows.length})` },
+              ]}
+            />
+            {rowFilter === 'amounts' && <p className="text-xs text-fg-muted">The statement text for these rows did not add up cleanly. Compare them with your statement.</p>}
+            {rowFilter === 'categories' && <p className="text-xs text-fg-muted">The amounts look fine; only the category is unsure. You can confirm these in bulk after importing.</p>}
+          </div>
+        )}
         <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface">
           {shown.map((r) => {
             const u = r.understanding;
@@ -325,10 +354,10 @@ export function ReviewStep({
             );
           })}
         </ul>
-        {visible < preview.rows.length && (
+        {visible < listed.length && (
           <div className="py-3 text-center">
             <Button variant="outline" onClick={() => setVisible((v) => v + PAGE)}>
-              Show more ({preview.rows.length - visible} remaining)
+              Show more ({listed.length - visible} remaining)
             </Button>
           </div>
         )}

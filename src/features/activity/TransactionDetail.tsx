@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { CheckCircle2, Link2, RotateCcw } from 'lucide-react';
+import { CheckCircle2, Link2, RotateCcw, X } from 'lucide-react';
 import { markReviewed, resetTransaction, setTransactionNote } from '@/db/actions';
 import { useLedger, useTransaction } from '@/db/hooks';
 import { CATEGORY_GROUP_LABELS, allCategories, categoryName } from '@/domain/categories';
 import { KIND_LABELS, USER_SELECTABLE_KINDS } from '@/domain/kinds';
 import type { CategoryGroup, Transaction, TxnKind } from '@/domain/types';
 import { formatDate } from '@/lib/dates';
-import { Badge, Button, CategoryIcon, Field, Input, Money, Notice, Select, Sheet, Spinner, Textarea, useToast } from '@/ui';
+import { Badge, Button, CategoryIcon, Field, IconButton, Input, Money, Notice, Select, Sheet, Spinner, Textarea, useToast } from '@/ui';
 import { CorrectionPrompt } from './CorrectionPrompt';
 import { COUNTERPARTY_LABELS, categorySourceLabel, kindSourceLabel, linkExplanation } from './labels';
 import { errorMessage, useCorrection } from './useCorrection';
@@ -32,23 +32,52 @@ export function TransactionDetail({
   txnId,
   onClose,
   onOpenTxn,
+  pane = false,
 }: {
   txnId: string | undefined;
   onClose: () => void;
   onOpenTxn: (id: string) => void;
+  /** Wide screens: render beside the list instead of as a bottom sheet. */
+  pane?: boolean;
 }) {
   const txn = useTransaction(txnId);
+  const content =
+    txn === undefined ? (
+      <Spinner label="Loading transaction" />
+    ) : txn === null ? (
+      <Notice tone="warning" title="Transaction not found">
+        It may have been removed with its statement.
+      </Notice>
+    ) : (
+      <DetailBody key={txn.id} txn={txn} onOpenTxn={onOpenTxn} />
+    );
+
+  if (pane) {
+    return (
+      <aside
+        aria-label="Transaction details"
+        className="sticky top-[calc(var(--vm-header-h,0px)+1rem)] max-h-[calc(100dvh-var(--vm-header-h,0px)-2rem)] overflow-y-auto rounded-2xl border border-border bg-surface p-4 shadow-card"
+      >
+        {txnId ? (
+          <>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <h2 className="truncate text-base font-semibold text-fg">{txn ? txn.merchant : 'Transaction'}</h2>
+              <IconButton label="Close details" aria-keyshortcuts="Escape" onClick={onClose}>
+                <X className="h-5 w-5" aria-hidden />
+              </IconButton>
+            </div>
+            {content}
+          </>
+        ) : (
+          <p className="py-10 text-center text-sm text-fg-muted">Select a transaction to see how it was read and to correct it.</p>
+        )}
+      </aside>
+    );
+  }
+
   return (
     <Sheet open={Boolean(txnId)} onClose={onClose} title={txn ? txn.merchant : 'Transaction'} size="md">
-      {txn === undefined ? (
-        <Spinner label="Loading transaction" />
-      ) : txn === null ? (
-        <Notice tone="warning" title="Transaction not found">
-          It may have been removed with its statement.
-        </Notice>
-      ) : (
-        <DetailBody key={txn.id} txn={txn} onOpenTxn={onOpenTxn} />
-      )}
+      {content}
     </Sheet>
   );
 }

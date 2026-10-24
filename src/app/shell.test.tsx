@@ -10,6 +10,7 @@ vi.mock('@/db/hooks', () => ({
   useStatements: () => [],
   useSettings: () => ({ theme: 'system', hideAmounts: state.hideAmounts, p2pReviewThreshold: 500000, onboardingDone: true }),
 }));
+vi.mock('@/db/sampleBanner', () => ({ SampleBanner: () => null }));
 vi.mock('@/db/actions', () => ({ updateSettings: state.updateSettings }));
 vi.mock('@/engine/analytics', () => ({
   dataRange: () => ({ min: '2025-03-02', max: '2025-09-14' }),
@@ -53,6 +54,12 @@ vi.mock('@/features/settings/SettingsPage', async () => {
   const React = await import('react');
   return { default: () => React.createElement('p', null, 'settings body') };
 });
+for (const mod of ['explore/ExplorePage', 'accounts/AccountsPage', 'accounts/AccountDetailPage', 'learning/LearningPage']) {
+  vi.doMock(`@/features/${mod}`, async () => {
+    const React = await import('react');
+    return { default: () => React.createElement('p', null, `${mod} body`) };
+  });
+}
 vi.mock('@/features/reports/ReportPage', async () => {
   const React = await import('react');
   return { default: () => React.createElement('p', null, 'report body') };
@@ -70,30 +77,68 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
+const DESTINATIONS = ['Overview', 'Explore', 'Activity', 'Plan', 'Accounts'];
+
 describe('app shell', () => {
-  it('renders the overview with a heading and both navigations (sidebar + bottom tabs)', async () => {
+  it('renders the five destinations in the bottom tabs, the rail and the sidebar', async () => {
     render(<App />);
     expect(await screen.findByText('overview body')).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
-    expect(primaryNavs()).toHaveLength(2);
-    for (const nav of primaryNavs()) {
-      for (const name of ['Overview', 'Activity', 'Import', 'Plan', 'Settings']) {
-        expect(within(nav).getByRole('link', { name })).toBeInTheDocument();
-      }
+    const navs = primaryNavs();
+    expect(navs).toHaveLength(3);
+    const bottom = navs.find((n) => n.getAttribute('data-nav') === 'bottom')!;
+    const rail = navs.find((n) => n.closest('[data-nav="rail"]'))!;
+    const side = navs.find((n) => n.closest('[data-nav="sidebar"]'))!;
+    for (const nav of [bottom, rail, side]) {
+      expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(DESTINATIONS);
+      // Import and Settings are actions, never tabs.
+      expect(within(nav).queryByRole('link', { name: 'Import' })).not.toBeInTheDocument();
+      expect(within(nav).queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
     }
   });
 
-  it('marks the active item with aria-current and follows navigation', async () => {
+  it('switches layout by breakpoint class: tabs on phones, rail on tablets, sidebar on desktop', async () => {
+    render(<App />);
+    await screen.findByText('overview body');
+    expect(bottomNav().className).toContain('md:hidden');
+    const rail = document.querySelector('[data-nav="rail"]')!;
+    expect(rail.className.split(' ')).toContain('hidden');
+    expect(rail.className).toContain('md:flex');
+    expect(rail.className).toContain('lg:hidden');
+    const side = document.querySelector('[data-nav="sidebar"]')!;
+    expect(side.className).toContain('lg:flex');
+    expect(side.className.split(' ')).toContain('hidden');
+  });
+
+  it('offers Import as an action at every breakpoint', async () => {
+    render(<App />);
+    await screen.findByText('overview body');
+    const imports = Array.from(document.querySelectorAll('[data-action="import"]'));
+    // header (phones and tablets), rail and sidebar
+    expect(imports).toHaveLength(3);
+    for (const el of imports) expect(el.getAttribute('href')).toBe('#/import');
+    expect(document.querySelector('header [data-action="import"]')).not.toBeNull();
+    expect(document.querySelector('[data-nav="rail"] [data-action="import"]')).not.toBeNull();
+    expect(document.querySelector('[data-nav="sidebar"] [data-action="import"]')).not.toBeNull();
+    // Settings is behind a gear on phones and in the rail/sidebar elsewhere; Learning is in the sidebar.
+    expect(document.querySelector('header [data-action="settings"]')).not.toBeNull();
+    expect(within(document.querySelector('[data-nav="sidebar"]') as HTMLElement).getByRole('link', { name: 'Learning' })).toBeInTheDocument();
+  });
+
+  it('marks the active destination with aria-current and follows navigation', async () => {
     render(<App />);
     await screen.findByText('overview body');
     expect(within(bottomNav()).getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
     expect(within(bottomNav()).getByRole('link', { name: 'Activity' })).not.toHaveAttribute('aria-current');
 
-    await userEvent.click(within(bottomNav()).getByRole('link', { name: 'Import' }));
+    await userEvent.click(screen.getAllByRole('link', { name: 'Import statement' })[0]);
     expect(await screen.findByText('import body')).toBeInTheDocument();
-    expect(within(bottomNav()).getByRole('link', { name: 'Import' })).toHaveAttribute('aria-current', 'page');
-    expect(within(bottomNav()).getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current');
     expect(screen.getByRole('heading', { level: 1, name: 'Import statements' })).toBeInTheDocument();
+    expect(within(bottomNav()).getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current');
+
+    await userEvent.click(within(bottomNav()).getByRole('link', { name: 'Accounts' }));
+    expect(await screen.findByText('accounts/AccountsPage body')).toBeInTheDocument();
+    expect(within(bottomNav()).getByRole('link', { name: 'Accounts' })).toHaveAttribute('aria-current', 'page');
   });
 
   it('lets a page set its title, actions and period picker through usePageChrome', async () => {
@@ -144,9 +189,9 @@ describe('app shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on this screen.');
     expect(screen.getByText(/Your data is safe on this device/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reload' })).toBeInTheDocument();
-    expect(primaryNavs()).toHaveLength(2);
+    expect(primaryNavs()).toHaveLength(3);
 
-    await userEvent.click(within(bottomNav()).getByRole('link', { name: 'Settings' }));
+    await userEvent.click(document.querySelector('header [data-action="settings"]')!);
     expect(await screen.findByText('settings body')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });

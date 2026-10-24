@@ -545,6 +545,18 @@ function toStatement(ec: EvalContext, ev: Evaluated, opts: UniversalOptions, tem
     },
   );
   if (ev.cardSummary) st.cardSummary = ev.cardSummary;
+  // Honesty guard: a card row with no description is a summary or total line that happened to add up.
+  const blank = st.rows.filter((r) => !r.description.trim()).length;
+  if (ev.nature === 'liability' && blank > 0) {
+    st.reconciliation = {
+      ...st.reconciliation,
+      status: 'mismatch',
+      checks: [
+        ...st.reconciliation.checks,
+        { label: 'Every row has a description', ok: false, detail: `${blank} rows have no description and may be summary lines` },
+      ],
+    };
+  }
   st.template = template;
   if (template?.source === 'inferred') st.learnedTemplate = learnedDraft(ec, ev, opts, accountType, profile.institution);
   return st;

@@ -9,7 +9,7 @@ import type { ThemePreference } from '@/domain/types';
 
 export const THEME_STORAGE_KEY = 'vm-theme';
 /** App-bar colours, used for the browser/OS status bar (match --surface in each theme). */
-export const THEME_COLORS = { light: '#ffffff', dark: '#111722' } as const;
+export const THEME_COLORS = { light: '#ffffff', dark: '#13161c' } as const;
 
 export type ResolvedTheme = 'light' | 'dark';
 

@@ -1,6 +1,7 @@
 import type { ParsedStatement, SkippedLine, SourceRef } from '@/domain/types';
 import { finishStatement } from '../core/build';
 import { extractCardSummary } from '../universal/card';
+import { foreignFromCell } from '../universal/foreign';
 import { docText, findPeriod, looksLikeHolder, stripTitle, textLines } from '../core/meta';
 import type { DraftRow } from '../core/reconcile';
 import { collapse, joinWrapped, norm, readDate, readMoney, type WrappedLine } from '../core/text';
@@ -161,6 +162,7 @@ function parse(doc: LayoutDoc, _ctx: ParseContext): ParsedStatement {
             direction: amt.m.indicator === 'CR' ? 'credit' : 'debit',
             reference: ser?.text,
             cardMask: currentCard,
+            foreign: items.map((it) => (it !== amt.it ? foreignFromCell(it.text) : null)).find((f) => f) ?? undefined,
             source,
             warnings: [],
           },

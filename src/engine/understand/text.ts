@@ -180,7 +180,8 @@ export function cleanMerchantText(raw: string): string {
   // trailing txn ids such as "-AXLab12…" / "-YBL…"
   s = s.replace(/\s*-\s*(?:AXL|YBL|IBL|HDF|ICI|PPPL|YJP)[A-Za-z0-9]*$/i, '');
   // country code printed by card networks ("AMAZON INDIA IN"): drop it before repairing so "T IN" is not read as "TIN"
-  s = s.replace(/\s+IN$/i, (m, offset: number) => (s.slice(0, offset).includes(' ') || offset > 3 ? '' : m));
+  s = s.replace(/\s*\*+\s*$/, '');
+  s = s.replace(/\s+IND?$/i, (m, offset: number) => (s.slice(0, offset).includes(' ') || offset > 3 ? '' : m));
   s = s.split(' ').map(splitPascalCase).join(' ');
   s = repairFragments(s);
   let tokens = s.split(' ').filter((t) => t && !looksLikeReference(t));
@@ -189,7 +190,7 @@ export function cleanMerchantText(raw: string): string {
   if (tokens.length > 1 && /^www$/i.test(tokens[0])) tokens.shift();
   if (tokens.length > 1 && /^com$/i.test(tokens[tokens.length - 1])) tokens.pop();
   // country code printed by card networks: "AMAZON INDIA IN"
-  if (tokens.length > 1 && /^in$/i.test(tokens[tokens.length - 1])) tokens.pop();
+  if (tokens.length > 1 && /^ind?$/i.test(tokens[tokens.length - 1])) tokens.pop();
   s = tokens.join(' ');
   for (let i = 0; i < 3; i++) {
     const next = s.replace(LEGAL_SUFFIX, '').replace(/[\s\-,.:;]+$/g, '');
