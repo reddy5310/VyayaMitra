@@ -1,6 +1,7 @@
 import { useId, type ReactNode } from 'react';
 import { AlertTriangle, Info } from 'lucide-react';
 import { cn, Skeleton } from './primitives';
+import { usePrivacy } from './privacy';
 
 export type ChartDataStatus = 'complete' | 'incomplete' | 'estimate';
 
@@ -46,6 +47,7 @@ export function ChartFrame({
   children,
 }: ChartFrameProps) {
   const titleId = useId();
+  const { hideAmounts } = usePrivacy();
   return (
     <section
       aria-labelledby={titleId}
@@ -95,7 +97,7 @@ export function ChartFrame({
           {children}
           <details className="mt-3 text-sm">
             <summary className="min-h-touch cursor-pointer select-none py-2 font-medium text-primary">Show as a table</summary>
-            <div className="mt-2 overflow-x-auto">{table}</div>
+            <div className={cn('mt-2 overflow-x-auto', hideAmounts && '[&_.tabular]:select-none [&_.tabular]:blur-[6px]')}>{table}</div>
           </details>
         </>
       )}

@@ -1,9 +1,9 @@
 import { Link } from 'react-router-dom';
 import { ArrowRight } from 'lucide-react';
-import type { DataStatus, LedgerSummary } from '@/engine/analytics';
+import type { DataStatus, LedgerSummary, SpendingComparison } from '@/engine/analytics';
 import { ROUTES, activityLink, exploreLink } from '@/app/routes';
 import { formatDate } from '@/lib/dates';
-import { Badge, Card, Money, cn } from '@/ui';
+import { Badge, Card, MeterBar, Money, cn } from '@/ui';
 
 const linkClass = 'font-medium text-primary underline-offset-2 hover:underline';
 
@@ -19,13 +19,13 @@ export function StatusStrip({ status }: { status: DataStatus }) {
       aria-label="Data status"
     >
       <Link to={ROUTES.accounts} className={cn(linkClass, 'inline-flex min-h-touch items-center')}>
-        {status.dataThrough ? `Statements through ${formatDate(status.dataThrough, { short: true })}` : 'No statements yet'} ·{' '}
+        {status.dataThrough ? `Data through ${formatDate(status.dataThrough, { short: true })}` : 'No statements yet'} ·{' '}
         {plural(status.accountCount, 'account', 'accounts')}
       </Link>
       {status.needsReview > 0 && (
         <Link to={activityLink({ review: true })} className={cn(linkClass, 'inline-flex min-h-touch items-center gap-1.5')}>
           <span aria-hidden>·</span>
-          {plural(status.needsReview, 'item needs', 'items need')} review
+          {status.needsReview} to review
         </Link>
       )}
     </p>
@@ -38,14 +38,19 @@ interface Props {
   plan: { monthlyLimit: number; categories: string[] } | null;
   /** The period is exactly one calendar month, so it can be compared with a monthly plan. */
   singleMonth: boolean;
+  /** Current period vs the previous one; shown only when the engine says they are comparable. */
+  comparison?: SpendingComparison | null;
+  /** Where an even pace would be today (current month only). */
+  expectedByToday?: number;
 }
 
 /** The first thing on the page: what was recorded, and how that sits against the plan. Never a "safe to spend" claim. */
-export function MainSummary({ summary, status, plan, singleMonth }: Props) {
+export function MainSummary({ summary, status, plan, singleMonth, comparison, expectedByToday }: Props) {
   const cardsOnly = status.evidence === 'cards_only';
   const through = status.dataThrough ? formatDate(status.dataThrough) : null;
   const planSpent = plan ? summary.byCategory.filter((c) => plan.categories.includes(c.category)).reduce((s, c) => s + c.amount, 0) : 0;
   const remaining = plan ? plan.monthlyLimit - planSpent : 0;
+  const diff = comparison && comparison.comparable ? comparison.current.total - comparison.previous.total : 0;
   const showRate = !cardsOnly && summary.savingsRate !== null;
 
   return (
@@ -54,10 +59,18 @@ export function MainSummary({ summary, status, plan, singleMonth }: Props) {
         <h2 className="text-sm font-medium text-fg-muted">{cardsOnly ? 'Card purchases recorded' : 'Spending recorded'}</h2>
         {!summary.coverage.complete && <Badge tone="warning">Provisional{through ? `: statements through ${through}` : ''}</Badge>}
       </div>
-      <p className="mt-1 text-3xl font-semibold text-fg">
+      <p className="mt-1 break-words text-3xl font-semibold text-fg">
         <Money value={summary.spending} whole />
       </p>
-      <p className="mt-0.5 text-xs text-fg-subtle">
+      {comparison && diff !== 0 && (
+        <p className="mt-1 text-sm text-fg-muted">
+          <Money value={Math.abs(diff)} whole className="font-medium text-fg" /> {diff > 0 ? 'more' : 'less'} than {comparison.previous.label} ·{' '}
+          <Link to={exploreLink('compare')} className={linkClass}>
+            Explain<span aria-hidden> →</span>
+          </Link>
+        </p>
+      )}
+      <p className="mt-1 text-xs text-fg-subtle">
         {summary.refunds > 0 && (
           <>
             After <Money value={summary.refunds} whole /> of refunds.{' '}
@@ -95,19 +108,31 @@ export function MainSummary({ summary, status, plan, singleMonth }: Props) {
       <div className="mt-3 border-t border-border pt-3">
         {plan && singleMonth ? (
           <>
-            <p className="text-sm text-fg-muted">Remaining in your spending plan</p>
-            <p className={cn('text-xl font-semibold', remaining < 0 ? 'text-negative' : 'text-fg')}>
-              {remaining < 0 ? (
+            <h3 className="text-sm font-medium text-fg-muted">Your spending plan</h3>
+            <MeterBar
+              className="mt-2"
+              value={planSpent}
+              target={plan.monthlyLimit}
+              expected={expectedByToday}
+              showText={false}
+              label="Spending against your plan"
+            />
+            <p className="mt-1.5 text-sm text-fg">
+              <Money value={planSpent} whole className="font-medium" /> of <Money value={plan.monthlyLimit} whole /> ·{' '}
+              {remaining >= 0 ? (
                 <>
-                  <Money value={-remaining} whole /> over
+                  <Money value={remaining} whole /> under your plan
                 </>
               ) : (
-                <Money value={remaining} whole />
+                <span className="font-medium text-negative">
+                  <Money value={-remaining} whole /> over your plan
+                </span>
               )}
+              {through ? ` · data through ${through}` : ''}
             </p>
             <p className="text-xs text-fg-subtle">
-              <Money value={planSpent} whole /> of <Money value={plan.monthlyLimit} whole /> across {plural(plan.categories.length, 'budgeted category', 'budgeted categories')}
-              {through ? ` · data through ${through}` : ''}. Spending in other categories is not counted here.
+              Counts {plural(plan.categories.length, 'budgeted category', 'budgeted categories')} only; spending elsewhere is not included
+              {expectedByToday !== undefined ? '. The tick marks where an even pace would be today' : ''}.
             </p>
           </>
         ) : plan ? (
@@ -124,7 +149,7 @@ export function MainSummary({ summary, status, plan, singleMonth }: Props) {
       </div>
 
       {!cardsOnly && (
-        <dl className="mt-3 grid grid-cols-3 gap-3 border-t border-border pt-3 text-sm">
+        <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 border-t border-border pt-3 text-sm min-[420px]:grid-cols-3">
           <div>
             <dt className="text-fg-muted">Income</dt>
             <dd className="font-semibold text-fg">{summary.savingsRate === null ? '—' : <Money value={summary.income} whole />}</dd>

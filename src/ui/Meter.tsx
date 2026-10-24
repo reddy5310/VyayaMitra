@@ -14,6 +14,8 @@ const FILL: Record<Tone, string> = {
 /**
  * Bullet meter for "how much of a target is used" (budgets, limits).
  * - `value` and `target` are paise (or pass `format` for other units).
+ * - `tone` is chosen by the caller from pace and context (e.g. 96% used at month end is fine); the meter
+ *   never turns amber or red on its own percentage.
  * - `expected` draws a tick where spending should be by today if spread evenly.
  * - Above target the track grows so the target marker stays visible, the part beyond it is drawn in the
  *   negative colour, and the over amount is written out (colour is never the only cue).
@@ -24,6 +26,7 @@ export function MeterBar({
   expected,
   label,
   format = (n: number) => formatINR(n, { whole: true }),
+  tone = 'neutral',
   showText = true,
   className,
 }: {
@@ -33,6 +36,8 @@ export function MeterBar({
   /** Accessible name, e.g. "Groceries budget". */
   label: string;
   format?: (n: number) => string;
+  /** Status colour for the filled part. Default: the calm accent. */
+  tone?: 'neutral' | 'positive' | 'warning' | 'negative';
   showText?: boolean;
   className?: string;
 }) {
@@ -42,8 +47,7 @@ export function MeterBar({
   const pct = (n: number) => `${Math.min(100, Math.max(0, (n / max) * 100))}%`;
   const within = Math.min(value, safeTarget);
   const text = `${format(value)} of ${format(safeTarget)}${over > 0 ? `, ${format(over)} over` : ''}`;
-  const nearing = safeTarget > 0 && value / safeTarget >= 0.85 && over === 0;
-  const tone: Tone = nearing ? 'warning' : 'primary';
+  const fill: Tone = tone === 'neutral' ? 'primary' : tone;
   return (
     <div className={cn('w-full', className)}>
       <div
@@ -55,7 +59,7 @@ export function MeterBar({
         aria-valuetext={`${text}${expected !== undefined ? `; ${format(expected)} expected by today` : ''}`}
         className="relative h-2.5 w-full overflow-hidden rounded-full bg-surface-3"
       >
-        <div className={cn('absolute inset-y-0 left-0 rounded-l-full', FILL[tone])} style={{ width: pct(within) }} />
+        <div className={cn('absolute inset-y-0 left-0 rounded-l-full', FILL[fill])} style={{ width: pct(within) }} />
         {over > 0 && <div className={cn('absolute inset-y-0', FILL.negative)} style={{ left: pct(safeTarget), width: pct(over) }} />}
         {safeTarget > 0 && over > 0 && <div aria-hidden className="absolute inset-y-0 w-0.5 bg-surface" style={{ left: pct(safeTarget) }} />}
         {expected !== undefined && <div aria-hidden className="absolute -inset-y-0.5 w-0.5 bg-fg" style={{ left: pct(expected) }} />}

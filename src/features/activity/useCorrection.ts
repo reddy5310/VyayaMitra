@@ -9,6 +9,7 @@ import type { Transaction, TxnKind } from '@/domain/types';
 import { useToast } from '@/ui';
 import { setCategoryForSelected, setKindForSelected } from './bulk';
 import { correctionMessage } from './labels';
+import { makeUndo, snapshot } from './undo';
 
 export type PendingChange =
   | { type: 'category'; value: string; label: string }
@@ -40,6 +41,28 @@ export function useCorrection(
     [allTxns, txnId, merchantKey],
   );
 
+  /** Toast action that takes the correction back. The closure outlives this component, so leaving the screen does not lose it. */
+  const undoAction = useCallback(
+    (undo: (() => Promise<void>) | null) =>
+      undo
+        ? {
+            label: 'Undo',
+            onClick: () => {
+              undo().then(
+                () => toast('Change undone', { tone: 'success' }),
+                (e: unknown) => toast(errorMessage(e), { tone: 'error' }),
+              );
+            },
+          }
+        : undefined,
+    [toast],
+  );
+
+  const merchantRows = useMemo(
+    () => (txnId && merchantKey ? allTxns.filter((t) => t.merchantKey === merchantKey) : []),
+    [allTxns, txnId, merchantKey],
+  );
+
   const request = useCallback((change: PendingChange) => {
     setError(null);
     setPending(change);
@@ -61,7 +84,8 @@ export function useCorrection(
             : pending.type === 'kind'
               ? await setTransactionKind(txn.id, pending.value, scope)
               : await renameMerchant(txn.id, pending.value, scope);
-        toast(correctionMessage(scope, result.updated, txn.merchant), { tone: 'success' });
+        const undo = makeUndo(pending, scope, [snapshot(txn)], result.ruleId);
+        toast(correctionMessage(scope, result.updated, txn.merchant), { tone: 'success', action: undoAction(undo) });
         const applied = pending;
         setPending(null);
         await onApplied?.(applied, scope);
@@ -73,7 +97,7 @@ export function useCorrection(
         setBusy(false);
       }
     },
-    [txn, pending, toast, onApplied],
+    [txn, pending, toast, onApplied, undoAction],
   );
 
   /** Apply a category or type change to exactly these transactions (the group's checked rows). */
@@ -83,9 +107,14 @@ export function useCorrection(
       setBusy(true);
       setError(null);
       try {
+        const byId = new Map(allTxns.map((t) => [t.id, t]));
+        const before = ids.flatMap((id) => (byId.has(id) ? [snapshot(byId.get(id)!)] : []));
         if (pending.type === 'category') await setCategoryForSelected(ids, pending.value);
         else await setKindForSelected(ids, pending.value);
-        toast(`Updated ${ids.length} selected transaction${ids.length === 1 ? '' : 's'}`, { tone: 'success' });
+        toast(`Updated ${ids.length} selected transaction${ids.length === 1 ? '' : 's'}`, {
+          tone: 'success',
+          action: undoAction(makeUndo(pending, 'selected', before, undefined)),
+        });
         const applied = pending;
         setPending(null);
         await onApplied?.(applied, 'selected', ids);
@@ -97,8 +126,8 @@ export function useCorrection(
         setBusy(false);
       }
     },
-    [pending, toast, onApplied],
+    [pending, toast, onApplied, allTxns, undoAction],
   );
 
-  return { pending, request, cancel, apply, applySelected, busy, error, otherCount };
+  return { pending, request, cancel, apply, applySelected, busy, error, otherCount, merchantRows };
 }

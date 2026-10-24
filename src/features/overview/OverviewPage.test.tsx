@@ -34,6 +34,7 @@ const analytics = vi.hoisted(() => ({
   dataStatus: vi.fn(),
   spendingPlan: vi.fn(),
   cumulativeSpending: vi.fn(),
+  compareSpending: vi.fn(),
   detectRecurring: vi.fn(),
 }));
 vi.mock('@/engine/analytics', () => analytics);
@@ -101,6 +102,7 @@ function setup(
     dues?: CardDue[];
     accounts?: Account[];
     plan?: { monthlyLimit: number; categories: string[] } | null;
+    comparison?: unknown;
   } = {},
 ) {
   hooks.useLedger.mockReturnValue({
@@ -118,6 +120,7 @@ function setup(
   analytics.dataStatus.mockReturnValue(o.status ?? statusFixture());
   analytics.spendingPlan.mockReturnValue(o.plan === undefined ? { monthlyLimit: 3_000_000, categories: ['food_dining', 'groceries'] } : o.plan);
   analytics.cumulativeSpending.mockReturnValue(series);
+  analytics.compareSpending.mockReturnValue(o.comparison ?? { comparable: false, current: { total: 0, label: '' }, previous: { total: 0, label: '' } });
   analytics.generateInsights.mockReturnValue(o.insights ?? []);
   analytics.upcomingCardDues.mockReturnValue(o.dues ?? []);
   analytics.detectRecurring.mockReturnValue([]);
@@ -150,12 +153,12 @@ describe('Overview first screen', () => {
   it('shows data status, recorded spending and what remains in the plan, without a "safe to spend" claim', () => {
     setup();
     const strip = screen.getByLabelText('Data status');
-    expect(strip).toHaveTextContent(`Statements through ${formatDate('2025-09-30', { short: true })} · 2 accounts`);
-    expect(within(strip).getByRole('link', { name: /4 items need review/ })).toHaveAttribute('href', '/activity?review=1');
+    expect(strip).toHaveTextContent(`Data through ${formatDate('2025-09-30', { short: true })} · 2 accounts`);
+    expect(within(strip).getByRole('link', { name: /4 to review/ })).toHaveAttribute('href', '/activity?review=1');
     expect(screen.getByText('Spending recorded')).toBeInTheDocument();
-    expect(screen.getByText('Remaining in your spending plan')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Your spending plan' })).toBeInTheDocument();
     // plan 30,000 minus 20,000 spent in budgeted categories
-    expect(screen.getByText(/across 2 budgeted categories/)).toBeInTheDocument();
+    expect(screen.getByText(/Counts 2 budgeted categories only/)).toBeInTheDocument();
     expect(screen.queryByText(/safe to spend/i)).not.toBeInTheDocument();
   });
 
@@ -194,6 +197,37 @@ describe('Overview first screen', () => {
     setup({ plan: null });
     expect(screen.getByText(/No spending plan yet/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Set budgets' })).toHaveAttribute('href', '/plan?tab=budgets');
+  });
+});
+
+describe('Overview story: comparison and plan meter', () => {
+  const cmp = (comparable: boolean, cur: number, prev: number) => ({
+    comparable,
+    current: { total: cur, label: 'September 2025' },
+    previous: { total: prev, label: 'August 2025' },
+  });
+
+  it('adds one comparison line, linking to Explore, only when comparable', () => {
+    setup({ comparison: cmp(true, 5_000_000, 4_680_000) });
+    expect(screen.getByText(/more than August 2025/)).toHaveTextContent('₹3,200 more than August 2025');
+    expect(screen.getByRole('link', { name: /Explain/ })).toHaveAttribute('href', '/explore?view=compare');
+  });
+
+  it('says nothing about a change when the periods are not comparable', () => {
+    setup({ comparison: cmp(false, 5_000_000, 4_680_000) });
+    expect(screen.queryByText(/more than|less than/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Explain/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the plan as a meter with the amount under the plan and data-through date', () => {
+    setup({ plan: { monthlyLimit: 4_000_000, categories: ['food_dining', 'groceries'] } });
+    expect(screen.getByRole('meter', { name: 'Spending against your plan' })).toBeInTheDocument();
+    expect(screen.getByText(/under your plan/)).toHaveTextContent(`₹20,000 of ₹40,000 · ₹20,000 under your plan · data through ${formatDate('2025-09-30')}`);
+  });
+
+  it('shows the excess when over the plan', () => {
+    setup({ plan: { monthlyLimit: 1_500_000, categories: ['food_dining', 'groceries'] } });
+    expect(screen.getByText(/over your plan/)).toHaveTextContent('₹5,000 over your plan');
   });
 });
 

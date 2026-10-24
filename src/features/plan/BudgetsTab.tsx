@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Pencil, Plus, Trash2, Wallet } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, FlaskConical, Pencil, Plus, Trash2, Wallet } from 'lucide-react';
 import { categoryName } from '@/domain/categories';
 import type { Budget, MonthKey } from '@/domain/types';
 import { deleteBudget } from '@/db/actions';
@@ -9,9 +9,9 @@ import { usePeriod } from '@/app/period';
 import { activityLink } from '@/app/routes';
 import { budgetStatuses, categoryBaselines, dataRange, dataStatus, type BudgetStatus } from '@/engine/analytics';
 import { addMonths, formatDate, formatMonth, monthKey, todayIso } from '@/lib/dates';
-import { Badge, Button, Card, CategoryIcon, EmptyState, IconButton, Money, Notice, useToast, type Tone } from '@/ui';
+import { Badge, Button, Card, CategoryIcon, EmptyState, IconButton, MeterBar, Money, Notice, useToast, type Tone } from '@/ui';
 import { BudgetSheet } from './BudgetSheet';
-import { Meter } from './Meter';
+import { ScenarioEditor } from './ScenarioEditor';
 import { ConfirmSheet, ListSkeleton } from './planUi';
 
 
@@ -44,6 +44,11 @@ export function BudgetsTab() {
     [ready, transactions, accounts, statements, today],
   );
 
+  const [params] = useSearchParams();
+  const prefillTarget = Number(params.get('target'));
+  const prefill =
+    params.get('category') && Number.isSafeInteger(prefillTarget) && prefillTarget > 0 ? { category: params.get('category') as string, target: prefillTarget } : null;
+  const [scenarioOpen, setScenarioOpen] = useState(params.get('scenario') === '1' || prefill !== null);
   const [sheet, setSheet] = useState<{ editing: Budget | null } | null>(null);
   const [deleting, setDeleting] = useState<Budget | null>(null);
 
@@ -65,10 +70,19 @@ export function BudgetsTab() {
             <ChevronRight className="h-5 w-5" aria-hidden />
           </IconButton>
         </div>
-        <Button icon={<Plus className="h-4 w-4" aria-hidden />} onClick={() => setSheet({ editing: null })} disabled={!ready || budgets === undefined}>
-          Add budget
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" icon={<FlaskConical className="h-4 w-4" aria-hidden />} onClick={() => setScenarioOpen((o) => !o)} disabled={!ready || budgets === undefined} aria-expanded={scenarioOpen}>
+            Try a scenario
+          </Button>
+          <Button icon={<Plus className="h-4 w-4" aria-hidden />} onClick={() => setSheet({ editing: null })} disabled={!ready || budgets === undefined}>
+            Add budget
+          </Button>
+        </div>
       </div>
+
+      {scenarioOpen && ready && budgets !== undefined && (
+        <ScenarioEditor budgets={budgets} baselines={baselines} customCategories={customCategories} prefill={prefill} onClose={() => setScenarioOpen(false)} />
+      )}
 
       {!ready || budgets === undefined ? (
         <ListSkeleton />
@@ -151,7 +165,7 @@ function BudgetRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const { budget, spent, remaining, usage, expectedByToday, coverageComplete, txnIds } = status;
+  const { budget, spent, remaining, expectedByToday, coverageComplete, txnIds } = status;
   const name = categoryName(budget.category, customCategories);
   const badge = paceBadge(status, isCurrent);
   const paceFraction = isCurrent && expectedByToday !== undefined && budget.monthlyLimit > 0 ? expectedByToday / budget.monthlyLimit : null;
@@ -189,7 +203,7 @@ function BudgetRow({
           </div>
         </div>
 
-        <Meter className="mt-3" value={usage} marker={paceFraction} tone={badge.tone} label={`${name} budget used`} />
+        <MeterBar className="mt-3" value={spent} target={budget.monthlyLimit} expected={isCurrent ? expectedByToday : undefined} showText={false} label={`${name} budget used`} />
         {paceFraction !== null && expectedByToday !== undefined && (
           <p className="mt-1.5 text-xs text-fg-muted">
             The marker shows where an even pace would be today: <Money value={expectedByToday} whole />.

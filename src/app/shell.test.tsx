@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Transaction } from '@/domain/types';
@@ -7,6 +7,10 @@ const state = vi.hoisted(() => ({ hideAmounts: false, updateSettings: vi.fn(asyn
 
 vi.mock('@/db/hooks', () => ({
   useTransactions: () => [{ date: '2025-09-14' }] as Transaction[],
+  useAccounts: () => [
+    { id: 'a1', name: 'Test Savings' },
+    { id: 'a2', name: 'Test Card' },
+  ],
   useStatements: () => [],
   useSettings: () => ({ theme: 'system', hideAmounts: state.hideAmounts, p2pReviewThreshold: 500000, onboardingDone: true }),
 }));
@@ -200,5 +204,28 @@ describe('app shell', () => {
     window.location.hash = '#/nowhere';
     render(<App />);
     expect(await screen.findByText('overview body')).toBeInTheDocument();
+  });
+
+  it('lets the person scope every screen to some accounts, and remembers it', async () => {
+    localStorage.removeItem('vm-scope');
+    window.location.hash = '#/activity';
+    render(<App />);
+    await screen.findByText('activity body');
+    await userEvent.click(screen.getByRole('button', { name: /All accounts/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Which accounts?' });
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Test Card' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('button', { name: /Test Savings/ })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('vm-scope')!)).toEqual(['a1']);
+  });
+
+  it('shows a quiet note while offline and nothing when online', async () => {
+    render(<App />);
+    await screen.findByText('overview body');
+    expect(document.querySelector('[data-offline]')).toBeNull();
+    window.dispatchEvent(new Event('offline'));
+    expect(await screen.findByText(/Offline — everything still works except loading the OCR files/)).toBeInTheDocument();
+    window.dispatchEvent(new Event('online'));
+    await waitFor(() => expect(document.querySelector('[data-offline]')).toBeNull());
   });
 });

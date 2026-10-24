@@ -270,6 +270,29 @@ describe('de-duplication', () => {
     expect(await db.transactions.count()).toBe(3);
   });
 
+  it('keepDuplicateIndexes inserts chosen duplicates with a distinct fingerprint; others stay skipped', async () => {
+    await importFile('jan.pdf');
+    mockParse.mockResolvedValueOnce(makeParsed(JAN));
+    const preview = await prepareImport(fileOf('jan-again.pdf', 'again'));
+    expect(preview.rows.every((r) => r.duplicateOf)).toBe(true);
+    const res = await commitImport(preview, { mode: 'add', keepDuplicateIndexes: [1] });
+    expect(res).toMatchObject({ inserted: 1, skippedDuplicates: 2 });
+    const all = await db.transactions.toArray();
+    expect(all).toHaveLength(4);
+    const kept = all.filter((t) => t.fingerprint.includes(':kept:'));
+    expect(kept).toHaveLength(1);
+    expect(kept[0].rawDescription).toBe('ACME SALARY');
+
+    // re-importing the same file adds nothing, and keeping it again gets a fresh identity
+    mockParse.mockResolvedValueOnce(makeParsed(JAN));
+    const again = await prepareImport(fileOf('jan-3.pdf', 'third'));
+    expect(await commitImport(again, { mode: 'add' })).toMatchObject({ inserted: 0, skippedDuplicates: 3 });
+    expect(await db.transactions.count()).toBe(4);
+    const twice = await commitImport(again, { mode: 'add', keepDuplicateIndexes: [1] });
+    expect(twice.inserted).toBe(1);
+    expect(new Set((await db.transactions.toArray()).map((t) => t.fingerprint)).size).toBe(5);
+  });
+
   it('honours excluded rows', async () => {
     mockParse.mockResolvedValueOnce(makeParsed(JAN));
     const preview = await prepareImport(fileOf('jan.pdf', 'jan'));

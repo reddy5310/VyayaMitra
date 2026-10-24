@@ -25,7 +25,7 @@ function QuickLink({ to, icon, title, body }: { to: string; icon: ReactNode; tit
   return (
     <Link
       to={to}
-      className="flex min-h-touch items-center gap-3 rounded-2xl border border-border bg-surface p-4 shadow-card transition-colors hover:bg-surface-2"
+      className="flex min-h-touch min-w-0 items-center gap-3 rounded-2xl border border-border bg-surface p-4 shadow-card transition-colors hover:bg-surface-2"
     >
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-soft text-primary">{icon}</span>
       <span className="min-w-0">

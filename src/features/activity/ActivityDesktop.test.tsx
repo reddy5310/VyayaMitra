@@ -18,16 +18,20 @@ vi.mock('@/db/hooks', () => ({
   useLedger: mocks.useLedger,
   useTransaction: mocks.useTransaction,
   useRules: () => [],
+  useRecurringDecisions: () => [],
   useSettings: () => ({ p2pReviewThreshold: 500_000 }),
 }));
 vi.mock('@/db/actions', () => ({}));
 vi.mock('@/engine/analytics', () => ({
   applyQuery: (t: Transaction[]) => t,
+  detectRecurring: () => [],
+  isSeriesActive: () => true,
   summarize: () => ({ spending: 0, income: 0 }),
 }));
 vi.mock('@/engine/understand', () => ({ reviewPriority: () => [], suggestCategories: () => [] }));
 
 import ActivityPage from './ActivityPage';
+import { filtersFromParams } from './useActivityFilters';
 
 function Probe() {
   return <output data-testid="loc">{useLocation().search}</output>;
@@ -130,7 +134,7 @@ describe('Activity remembers where you were', () => {
     stubWidth(false);
     const scrollTo = vi.fn();
     vi.stubGlobal('scrollTo', scrollTo);
-    const key = 'vm-activity-view:' + JSON.stringify({ q: '', accountId: '', category: '', kind: '', review: false, ids: [] }) + '|2025-09-01|2025-09-30';
+    const key = 'vm-activity-view:' + JSON.stringify(filtersFromParams(new URLSearchParams())) + '|2025-09-01|2025-09-30';
     sessionStorage.setItem(key, JSON.stringify({ y: 1234, visible: 120 }));
     setup();
     expect(screen.getAllByTestId('txn-row')).toHaveLength(120);

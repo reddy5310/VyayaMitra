@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   Compass,
@@ -13,13 +13,14 @@ import {
   Settings,
   Sparkles,
   Target,
+  WifiOff,
   type LucideIcon,
 } from 'lucide-react';
 import { SampleBanner } from '@/db/sampleBanner';
 import { Button, IconButton, cn, usePrivacy, useToast } from '@/ui';
 import { PageChromeProvider, useChromeConfig } from './chrome';
 import { useInstall } from './install';
-import { PeriodPicker } from './period';
+import { AccountScopePicker, PeriodPicker } from './period';
 import { UpdateBanner } from './pwa';
 import { ROUTES } from './routes';
 import { useScrollMemory } from './scroll';
@@ -173,17 +174,17 @@ function BottomTabs() {
               end={end}
               className={({ isActive }) =>
                 cn(
-                  'flex min-h-16 w-full flex-col items-center justify-center gap-0.5 px-0.5 text-[11px] font-medium transition-colors',
+                  'flex min-h-[64px] w-full min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-center text-[11px] font-medium leading-tight transition-colors',
                   isActive ? 'text-primary' : 'text-fg-muted',
                 )
               }
             >
               {({ isActive }) => (
                 <>
-                  <span className={cn('flex h-8 w-14 items-center justify-center rounded-full transition-colors', isActive && 'bg-primary-soft')}>
-                    <Icon className="h-5 w-5" aria-hidden />
+                  <span className={cn('flex h-[32px] w-[52px] items-center justify-center rounded-full transition-colors', isActive && 'bg-primary-soft')}>
+                    <Icon className="h-[22px] w-[22px]" aria-hidden />
                   </span>
-                  <span>{label}</span>
+                  <span className="max-w-full break-words">{label}</span>
                 </>
               )}
             </NavLink>
@@ -220,6 +221,33 @@ function SettingsAction() {
     >
       <Settings className="h-5 w-5" aria-hidden />
     </Link>
+  );
+}
+
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => {
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+  return online;
+}
+
+/** Small header note while the device is offline; nothing else about the app changes. */
+function OfflineNote() {
+  const online = useOnline();
+  if (online) return null;
+  return (
+    <p role="status" data-offline className="flex items-start gap-2 border-t border-border bg-surface-2 px-4 py-1.5 text-xs text-fg-muted md:px-8 print:hidden">
+      <WifiOff className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span>Offline — everything still works except loading the OCR files for the first time.</span>
+    </p>
   );
 }
 
@@ -270,20 +298,22 @@ function Header({ fallbackTitle }: { fallbackTitle: string }) {
           <h1 className="truncate text-lg font-semibold leading-tight text-fg md:text-2xl">{title}</h1>
           {chrome?.subtitle && <p className="mt-0.5 hidden text-sm text-fg-muted md:block">{chrome.subtitle}</p>}
         </div>
-        <div className="flex items-center gap-1 print:hidden md:order-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1 print:hidden md:order-2">
           {chrome?.actions}
           <HideAmountsToggle />
           <SettingsAction />
           <ImportAction />
         </div>
         {chrome?.showPeriod && (
-          <div className="order-last basis-full pb-1 print:hidden md:order-1 md:basis-auto md:pb-0">
+          <div className="order-last flex min-w-0 basis-full flex-wrap items-center gap-2 pb-1 print:hidden md:order-1 md:basis-auto md:pb-0">
             <PeriodPicker />
+            <AccountScopePicker />
           </div>
         )}
       </div>
       {/* Always visible while sample data is on (the header is sticky on phones). */}
       <SampleBanner />
+      <OfflineNote />
       <UpdateBanner />
     </header>
   );
@@ -330,7 +360,7 @@ function ShellFrame() {
           id="main"
           ref={mainRef}
           tabIndex={-1}
-          className="mx-auto max-w-6xl px-4 pb-[calc(6.5rem+env(safe-area-inset-bottom))] pt-4 focus:outline-none md:px-8 md:pb-12 print:pb-0"
+          className="mx-auto max-w-6xl px-4 pb-[calc(96px+env(safe-area-inset-bottom))] pt-4 focus:outline-none md:px-8 md:pb-12 print:pb-0"
         >
           <Outlet />
         </main>

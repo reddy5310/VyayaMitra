@@ -347,7 +347,7 @@ function CorrectionPromptFor({ correction, merchant }: { correction: ReturnType<
       <CorrectionPrompt
         change={correction.pending.label}
         merchant={merchant}
-        otherCount={correction.otherCount}
+        merchantRows={correction.merchantRows}
         busy={correction.busy}
         error={correction.error}
         onChoose={correction.apply}

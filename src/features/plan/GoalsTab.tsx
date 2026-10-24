@@ -5,12 +5,11 @@ import { deleteContribution, deleteGoal, updateGoal } from '@/db/actions';
 import { useGoalContributions, useGoals, useLedger } from '@/db/hooks';
 import { goalProgress, type GoalProgress } from '@/engine/analytics';
 import { formatDate, formatMonth, monthKey, todayIso } from '@/lib/dates';
-import { Badge, Button, Card, EmptyState, IconButton, Money, useToast, type Tone } from '@/ui';
+import { Badge, Button, Card, EmptyState, IconButton, MeterBar, Money, ProgressRing, useToast, type Tone } from '@/ui';
 import { ContributionSheet } from './ContributionSheet';
 import { GoalSheet } from './GoalSheet';
 import { goalIcon } from './goalStyle';
 import { errorMessage } from './errors';
-import { Meter, ProgressRing } from './Meter';
 import { ConfirmSheet, ListSkeleton } from './planUi';
 import { expectedSavedByToday } from './goalPlan';
 
@@ -191,9 +190,7 @@ function GoalCard({
   return (
     <Card className="h-full">
       <div className="flex items-start gap-3">
-        <ProgressRing value={p.progress} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name} progress`}>
-          {Math.round(Math.min(1, p.progress) * 100)}%
-        </ProgressRing>
+        <ProgressRing value={p.saved} target={goal.target} size={64} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name} progress`} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <h3 className="flex items-center gap-1.5 text-base font-semibold text-fg">
@@ -221,7 +218,7 @@ function GoalCard({
       </div>
 
       <div className="mt-3">
-        <Meter value={p.progress} marker={badge.expected !== null ? badge.expected / goal.target : null} tone={badge.tone === 'neutral' ? 'primary' : badge.tone} label={`${goal.name}: saved compared with where you planned to be`} />
+        <MeterBar value={p.saved} target={goal.target} expected={badge.expected ?? undefined} showText={false} label={`${goal.name}: saved compared with where you planned to be`} />
         <p className="mt-1.5 text-xs text-fg-muted">
           <Money value={p.remaining} whole /> to go.{' '}
           {badge.expected !== null && p.remaining > 0 ? (

@@ -5,11 +5,11 @@ import { usePeriod } from '@/app/period';
 import { ROUTES } from '@/app/routes';
 import { categoryById } from '@/domain/categories';
 import { monthlySeries } from '@/engine/analytics';
-import { addMonths, formatMonth, formatMonthShort, minIso, monthEnd, monthKey, monthStart, monthsBetween } from '@/lib/dates';
-import { formatINR } from '@/lib/money';
+import { addMonths, formatMonth, minIso, monthEnd, monthKey, monthStart, monthsBetween } from '@/lib/dates';
 import { Button, ChartFrame, chartColor } from '@/ui';
+import { monthAxisLabel } from './views';
 import { tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt, useHideAmounts } from './useExploreData';
 
 const MIN_MONTHS = 6;
 const MAX_MONTHS = 12;
@@ -21,6 +21,8 @@ const SERIES = [
 ] as const;
 
 export default function TrendsView() {
+  const fmt = useFmt();
+  const hidden = useHideAmounts();
   const { accounts, statements, transactions, period, today, scope } = useExploreData();
   const { setCustom } = usePeriod();
 
@@ -37,10 +39,12 @@ export default function TrendsView() {
 
   const complete = points.filter((p) => p.complete);
   const excluded = points.filter((p) => !p.complete);
-  const data = complete.map((p) => ({ label: formatMonthShort(p.month), income: p.income, spending: p.spending, invested: p.invested }));
+  const spansYears = new Set(points.map((p) => p.month.slice(0, 4))).size > 1;
+  const monthLabel = (m: string) => monthAxisLabel(m, spansYears, formatMonth);
+  const data = complete.map((p) => ({ label: monthLabel(p.month), income: p.income, spending: p.spending, invested: p.invested }));
   const latest = complete[complete.length - 1];
   const takeaway = latest
-    ? `${formatMonth(latest.month)}: income ${formatINR(latest.income, { whole: true })}, spending ${formatINR(latest.spending, { whole: true })}, invested ${formatINR(latest.invested, { whole: true })}.`
+    ? `${formatMonth(latest.month)}: income ${fmt(latest.income, { whole: true })}, spending ${fmt(latest.spending, { whole: true })}, invested ${fmt(latest.invested, { whole: true })}.`
     : undefined;
 
   return (
@@ -51,7 +55,7 @@ export default function TrendsView() {
       status={excluded.length > 0 ? 'incomplete' : 'complete'}
       statusNote={
         excluded.length > 0
-          ? `Left out because statements do not cover the whole month: ${excluded.map((p) => formatMonthShort(p.month)).join(', ')}. Showing only complete months so bars are never understated.`
+          ? `Left out because statements do not cover the whole month: ${excluded.map((p) => monthLabel(p.month)).join(', ')}. Showing only complete months so bars are never understated.`
           : undefined
       }
       empty={complete.length === 0 ? 'No month is fully covered by your statements yet, so there is nothing fair to compare.' : undefined}
@@ -77,7 +81,7 @@ export default function TrendsView() {
                 <td className={tableCell}>{formatMonth(p.month)}</td>
                 {SERIES.map((s) => (
                   <td key={s.key} className={tableNum}>
-                    {p.complete ? formatINR(p[s.key]) : '—'}
+                    {p.complete ? fmt(p[s.key]) : '—'}
                   </td>
                 ))}
                 <td className={tableCell}>{p.complete ? 'Complete' : 'Incomplete (not charted)'}</td>
@@ -97,8 +101,8 @@ export default function TrendsView() {
           <BarChart data={data} margin={{ left: 0, right: 8, top: 8 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgb(var(--border))" />
             <XAxis dataKey="label" tickLine={false} />
-            <YAxis tickFormatter={(v: number) => formatINR(v, { compact: true })} width={56} tickLine={false} axisLine={false} />
-            <Tooltip formatter={(v: number, name: string) => [formatINR(v), name]} />
+            <YAxis tickFormatter={(v: number) => (hidden ? '••••' : fmt(v, { compact: true }))} width={56} tickLine={false} axisLine={false} />
+            <Tooltip formatter={(v: number, name: string) => [fmt(v), name]} />
             <Legend />
             {SERIES.map((s) => (
               <Bar key={s.key} dataKey={s.key} name={s.label} fill={s.color} radius={[4, 4, 0, 0]} />

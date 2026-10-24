@@ -8,6 +8,7 @@ import { formatDate } from '@/lib/dates';
 import { ACCOUNT_TYPE_LABELS } from '../import/accountTypes';
 import { Badge, Card, CardHeader, EmptyState, ListGroup, ListRow, Skeleton } from '@/ui';
 import { CoverageGrid } from './CoverageGrid';
+import { ImportHistory } from './ImportHistory';
 import { GROUP_LABELS, coverageMonths, dataThrough, groupAccounts } from './accountInfo';
 
 const importLink = 'inline-flex min-h-touch items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-fg hover:bg-primary/90';
@@ -102,6 +103,8 @@ export default function AccountsPage() {
         <CardHeader title="Statement coverage" subtitle="The last 12 months. Tap a month to see that account's statements." />
         <CoverageGrid accounts={visible} statements={ledger.statements} months={months} />
       </Card>
+
+      <ImportHistory statements={ledger.statements} accounts={ledger.accounts} transactions={ledger.transactions} />
     </div>
   );
 }

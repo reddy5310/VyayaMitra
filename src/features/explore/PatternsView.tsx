@@ -3,10 +3,9 @@ import { Link } from 'react-router-dom';
 import { activityLink } from '@/app/routes';
 import { spendingCalendar, type HeatDay } from '@/engine/analytics';
 import { formatDate, weekday } from '@/lib/dates';
-import { formatINR } from '@/lib/money';
 import { ChartFrame, cn } from '@/ui';
 import { tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt } from './useExploreData';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 /** Monday = 0. */
@@ -21,6 +20,7 @@ interface Cell extends HeatDay {
 }
 
 export default function PatternsView() {
+  const fmt = useFmt();
   const { accounts, statements, periodTxns, period, scope } = useExploreData();
 
   const { cells, weeks, quartiles } = useMemo(() => {
@@ -57,12 +57,13 @@ export default function PatternsView() {
     return { cells: withLevel, weeks: rows, quartiles: q };
   }, [periodTxns, accounts, statements, period.start, period.end]);
 
+  const spansYears = period.start.slice(0, 4) !== period.end.slice(0, 4);
   const uncovered = cells.filter((c) => !c.covered).length;
   const spendDays = cells.filter((c) => c.covered && c.amount > 0);
   const busiest = spendDays.reduce<Cell | null>((a, b) => (!a || b.amount > a.amount ? b : a), null);
   const verifiedZero = cells.filter((c) => c.covered && c.amount === 0).length;
   const takeaway = busiest
-    ? `Busiest day: ${formatDate(busiest.date)} (${formatINR(busiest.amount, { whole: true })}). ${verifiedZero} day${verifiedZero === 1 ? '' : 's'} with verified zero spending${uncovered ? `; ${uncovered} day${uncovered === 1 ? '' : 's'} not covered by any statement` : ''}.`
+    ? `Busiest day: ${formatDate(busiest.date)} (${fmt(busiest.amount, { whole: true })}). ${verifiedZero} day${verifiedZero === 1 ? '' : 's'} with verified zero spending${uncovered ? `; ${uncovered} day${uncovered === 1 ? '' : 's'} not covered by any statement` : ''}.`
     : undefined;
 
   const shade = (level: number) => (level === 0 ? undefined : { background: `rgb(var(--primary) / ${[0, 0.2, 0.4, 0.65, 0.9][level]})` });
@@ -71,7 +72,7 @@ export default function PatternsView() {
       ? `${formatDate(c.date)}: no statement covers this day, spending unknown`
       : c.amount === 0
         ? `${formatDate(c.date)}: verified ₹0 spent`
-        : `${formatDate(c.date)}: ${formatINR(c.amount, { whole: true })} in ${c.count} payment${c.count === 1 ? '' : 's'}. See transactions`;
+        : `${formatDate(c.date)}: ${fmt(c.amount, { whole: true })} in ${c.count} payment${c.count === 1 ? '' : 's'}. See transactions`;
 
   return (
     <ChartFrame
@@ -95,7 +96,7 @@ export default function PatternsView() {
             {cells.map((c) => (
               <tr key={c.date}>
                 <td className={tableCell}>{c.ids.length ? <Link className="text-primary hover:underline" to={activityLink({ ids: c.ids })}>{formatDate(c.date)}</Link> : formatDate(c.date)}</td>
-                <td className={tableNum}>{c.covered ? formatINR(c.amount) : '—'}</td>
+                <td className={tableNum}>{c.covered ? fmt(c.amount) : '—'}</td>
                 <td className={tableNum}>{c.covered ? c.count : '—'}</td>
                 <td className={tableCell}>{c.covered ? (c.amount === 0 ? 'Verified zero' : 'Covered') : 'No statement'}</td>
               </tr>
@@ -116,7 +117,7 @@ export default function PatternsView() {
             const first = w.find((c): c is Cell => !!c);
             return (
               <div key={first?.date} className="contents">
-                <span className="self-center text-fg-muted">{first ? formatDate(first.date, { short: true }) : ''}</span>
+                <span className="self-center text-fg-muted">{first ? formatDate(first.date, { short: !spansYears }) : ''}</span>
                 {w.map((c, i) => {
                   if (!c) return <span key={i} aria-hidden />;
                   const base = 'flex aspect-square min-h-8 items-center justify-center rounded-md text-[11px] tabular-nums';
@@ -160,7 +161,7 @@ export default function PatternsView() {
         {[1, 2, 3, 4].map((l) => (
           <li key={l} className="flex items-center gap-1.5">
             <span className="h-4 w-4 rounded" style={shade(l)} aria-hidden />
-            {l === 1 ? `up to ${formatINR(quartiles[0], { whole: true })}` : l === 4 ? `over ${formatINR(quartiles[2], { whole: true })}` : l === 2 ? `to ${formatINR(quartiles[1], { whole: true })}` : `to ${formatINR(quartiles[2], { whole: true })}`}
+            {l === 1 ? `up to ${fmt(quartiles[0], { whole: true })}` : l === 4 ? `over ${fmt(quartiles[2], { whole: true })}` : l === 2 ? `to ${fmt(quartiles[1], { whole: true })}` : `to ${fmt(quartiles[2], { whole: true })}`}
           </li>
         ))}
         <li className="flex items-center gap-1.5">

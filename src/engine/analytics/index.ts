@@ -40,6 +40,17 @@ export interface LedgerQuery {
   needsReview?: boolean;
   /** Explicit id list (deep links from insight evidence). */
   ids?: string[];
+  /** Inclusive amount bounds in paise. */
+  minAmount?: Paise;
+  maxAmount?: Paise;
+  merchantKeys?: string[];
+  statementIds?: string[];
+  /**
+   * spending = expense/cash_withdrawal/fee/loan_payment/unknown debits; income = income/interest;
+   * transfer = self_transfer/card_payment/reversal/loan_disbursal; refund = refund;
+   * saving = investment/investment_return; people = p2p_out/p2p_in.
+   */
+  kindGroup?: 'spending' | 'income' | 'transfer' | 'refund' | 'saving' | 'people';
 }
 
 // ─── Periods ─────────────────────────────────────────────────────────────────
@@ -468,3 +479,7 @@ export interface CardCycle {
   paymentStatus: 'paid' | 'partly_paid' | 'unpaid' | 'unknown';
   txnIds: string[];
 }
+export type { MerchantChange, ChangeExplanation } from './explain';
+export { explainChange } from './explain';
+export type { ScenarioResult } from './scenario';
+export { planScenario } from './scenario';

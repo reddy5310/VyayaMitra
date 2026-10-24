@@ -3,7 +3,7 @@ import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
 import { monthEnd, monthStart } from '@/lib/dates';
 import { landingMonth } from './landing';
-import { useAccounts } from '@/db/hooks';
+import { useAccounts, useLedger } from '@/db/hooks';
 import { saveTemplate, useTemplates } from '@/db/learning';
 import type { TemplateDraft } from '@/domain/types';
 import {
@@ -80,6 +80,7 @@ export default function ImportPage() {
   usePageChrome({ title: 'Import statements' });
   const { setCustom } = usePeriod();
   const accounts = useAccounts() ?? [];
+  const ledger = useLedger();
   const templates = useTemplates() ?? [];
   const [phase, setPhase] = useState<Phase>({ name: 'choose' });
   const [error, setError] = useState<ErrorView | null>(null);
@@ -463,6 +464,8 @@ export default function ImportPage() {
           committing={phase.committing}
           commitError={commitError}
           via={phase.via}
+          existing={ledger.transactions}
+          statements={ledger.statements}
           templateName={templates.find((t) => t.id !== undefined && t.id === phase.preview.parsed.template?.id)?.name}
           onTeach={teachFile ? startTeach : undefined}
           onConfirm={(choices) => void confirm(choices)}

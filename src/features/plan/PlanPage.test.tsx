@@ -46,6 +46,14 @@ const analytics = vi.hoisted(() => ({
   evaluateSavingActions: vi.fn(),
   upcomingCardDues: vi.fn(),
   dataStatus: vi.fn(),
+  planScenario: vi.fn<(input: Parameters<typeof import('@/engine/analytics').planScenario>[0]) => import('@/engine/analytics').ScenarioResult>(() => ({
+    currentPlanTotal: 2_000_000,
+    scenarioPlanTotal: 1_800_000,
+    plannedReduction: 200_000,
+    perCategory: [{ category: 'food_dining', baseline: 900_000, current: 800_000, scenario: 600_000, reduction: 200_000, kept: false }],
+    goalImpact: [],
+    notes: ['This is a scenario, not a prediction.'],
+  })),
 }));
 vi.mock('@/engine/analytics', () => analytics);
 
@@ -240,6 +248,82 @@ describe('Budget pace', () => {
     renderPlan();
     expect(screen.getByText('Over budget')).toBeInTheDocument();
     expect(screen.getByText(/₹2,500 over|over$/)).toBeInTheDocument();
+  });
+});
+
+describe('Scenario editor', () => {
+  const budget = { id: 'b1', category: 'groceries', monthlyLimit: 1_000_000, createdAt: '', updatedAt: '' };
+  const result = (over = {}) => ({
+    currentPlanTotal: 1_000_000,
+    scenarioPlanTotal: 800_000,
+    plannedReduction: 200_000,
+    perCategory: [],
+    surplusNow: 300_000,
+    surplusScenario: 500_000,
+    goalImpact: [{ goalId: 'g1', name: 'Emergency fund', extraPerMonth: 200_000, monthsSooner: 2 }],
+    notes: ['Limits are not added on top of money already planned for goals.'],
+    ...over,
+  });
+
+  beforeEach(() => {
+    hooks.useBudgets.mockReturnValue([budget]);
+    analytics.planScenario.mockImplementation(() => result());
+  });
+
+  it('opens from the deep link and shows the current plan beside the scenario, labelled as not a prediction', () => {
+    renderPlan('/plan?tab=budgets&scenario=1');
+    expect(screen.getByText('Scenario — not a prediction')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Your plan now' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Scenario' })).toBeInTheDocument();
+    expect(screen.getByText(/Emergency fund: ₹2,000 more a month, about 2 months sooner/)).toBeInTheDocument();
+    expect(screen.getByText(/not added on top/)).toBeInTheDocument();
+  });
+
+  it('sends edited limits and kept expenses to planScenario', async () => {
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=budgets&scenario=1');
+    const input = screen.getByLabelText('Groceries limit (₹)');
+    await user.clear(input);
+    await user.type(input, '8,000');
+    await user.click(screen.getByLabelText(/Keep this expense/));
+    const last = analytics.planScenario.mock.calls.at(-1)![0];
+    expect(last.changes).toEqual([{ category: 'groceries', monthlyLimit: 800_000 }]);
+    expect(last.keep).toEqual(['groceries']);
+  });
+
+  it('prefills a single new limit from ?category=&target= (paise)', () => {
+    renderPlan('/plan?tab=budgets&category=food_dining&target=600000');
+    expect(screen.getByLabelText('Food & dining limit (₹)')).toHaveValue('6000');
+    const last = analytics.planScenario.mock.calls.at(-1)![0];
+    expect(last.changes).toContainEqual({ category: 'food_dining', monthlyLimit: 600_000 });
+  });
+
+  it('saves limits and creates planned saving actions for reductions', async () => {
+    actions.upsertBudget.mockResolvedValue({});
+    actions.createSavingAction.mockResolvedValue({});
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=budgets&scenario=1');
+    const input = screen.getByLabelText('Groceries limit (₹)');
+    await user.clear(input);
+    await user.type(input, '8000');
+    await user.click(screen.getByRole('button', { name: 'Save as my plan' }));
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(/planned, not observed/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Save plan' }));
+    expect(actions.upsertBudget).toHaveBeenCalledWith('groceries', 800_000);
+    expect(actions.createSavingAction).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'category_limit', category: 'groceries', baselineMonthly: expect.any(Number), targetMonthly: 800_000, status: 'active' }),
+    );
+  });
+
+  it('rejects an invalid scenario amount inline and blocks saving', async () => {
+    const user = userEvent.setup();
+    renderPlan('/plan?tab=budgets&scenario=1');
+    const input = screen.getByLabelText('Groceries limit (₹)');
+    await user.clear(input);
+    await user.type(input, 'abc');
+    expect(screen.getByText(/Enter an amount like/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save as my plan' })).toBeDisabled();
   });
 });
 

@@ -106,6 +106,39 @@ describe('AccountsPage', () => {
   });
 });
 
+describe('Import history', () => {
+  it('lists every import newest first and states exactly what undoing one removes', async () => {
+    const user = userEvent.setup();
+    mocks.useLedger.mockReturnValue({
+      ready: true,
+      accounts: [bank],
+      statements: [
+        makeStatement({ id: 'old', accountId: 'bank1', fileName: 'july.pdf', importedAt: '2025-08-01T10:00:00.000Z', rowCount: 3 }),
+        makeStatement({ id: 'new', accountId: 'bank1', fileName: 'august.pdf', importedAt: '2025-09-01T10:00:00.000Z', rowCount: 3, periodStart: '2025-08-01', periodEnd: '2025-08-31' }),
+      ],
+      transactions: [
+        makeTxn({ statementId: 'new', accountId: 'bank1', categorySource: 'user_txn' }),
+        makeTxn({ statementId: 'new', accountId: 'bank1' }),
+        makeTxn({ statementId: 'old', accountId: 'bank1' }),
+      ],
+      customCategories: [],
+    });
+    renderAt('/accounts');
+    const history = screen.getByRole('list', { name: 'Imports' });
+    const items = within(history).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('august.pdf');
+    expect(items[0]).toHaveTextContent('Demo Savings ••1234');
+    expect(items[1]).toHaveTextContent('july.pdf');
+
+    await user.click(within(items[0]).getByRole('button', { name: /undo this import: august.pdf/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/its 2 transactions, including 1 you corrected/)).toBeInTheDocument();
+    expect(mocks.deleteStatement).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Undo this import' }));
+    expect(mocks.deleteStatement).toHaveBeenCalledWith('new');
+  });
+});
+
 describe('AccountDetailPage', () => {
   it('lists statements with reconciliation badges and deletes one only after confirming', async () => {
     const user = userEvent.setup();

@@ -1,4 +1,4 @@
-import type { Transaction } from '@/domain/types';
+import type { Transaction, TxnKind } from '@/domain/types';
 import { metricBucket } from '@/domain/kinds';
 import type { LedgerQuery } from './index';
 
@@ -33,6 +33,15 @@ function matchesSearch(t: Transaction, tokens: string[], text: string): boolean 
   });
 }
 
+const KIND_GROUPS: Record<NonNullable<LedgerQuery['kindGroup']>, ReadonlySet<TxnKind>> = {
+  spending: new Set<TxnKind>(['expense', 'cash_withdrawal', 'fee', 'loan_payment', 'unknown']),
+  income: new Set<TxnKind>(['income', 'interest']),
+  transfer: new Set<TxnKind>(['self_transfer', 'card_payment', 'reversal', 'loan_disbursal']),
+  refund: new Set<TxnKind>(['refund']),
+  saving: new Set<TxnKind>(['investment', 'investment_return']),
+  people: new Set<TxnKind>(['p2p_out', 'p2p_in']),
+};
+
 /**
  * The single filter contract used by every list, summary, chart and report.
  * All criteria are AND-ed; omitted criteria do not constrain. Input order is preserved.
@@ -43,6 +52,9 @@ export function applyQuery(txns: readonly Transaction[], q: LedgerQuery): Transa
   const kinds = q.kinds && new Set(q.kinds);
   const buckets = q.buckets && new Set(q.buckets);
   const ids = q.ids && new Set(q.ids);
+  const merchantKeys = q.merchantKeys && new Set(q.merchantKeys);
+  const statementIds = q.statementIds && new Set(q.statementIds);
+  const group = q.kindGroup && KIND_GROUPS[q.kindGroup];
   const tokens = (q.search ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
 
   return txns.filter((t) => {
@@ -55,6 +67,12 @@ export function applyQuery(txns: readonly Transaction[], q: LedgerQuery): Transa
     if (q.direction && t.direction !== q.direction) return false;
     if (q.needsReview !== undefined && t.needsReview !== q.needsReview) return false;
     if (ids && !ids.has(t.id)) return false;
+    if (q.minAmount !== undefined && t.amount < q.minAmount) return false;
+    if (q.maxAmount !== undefined && t.amount > q.maxAmount) return false;
+    if (merchantKeys && !merchantKeys.has(t.merchantKey)) return false;
+    if (statementIds && !statementIds.has(t.statementId)) return false;
+    if (group && !group.has(t.kind)) return false;
+    if (q.kindGroup === 'spending' && t.kind === 'unknown' && t.direction !== 'debit') return false;
     if (tokens.length > 0 && !matchesSearch(t, tokens, haystack(t))) return false;
     return true;
   });

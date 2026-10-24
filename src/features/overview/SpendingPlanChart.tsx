@@ -118,7 +118,7 @@ export function SpendingPlanChart({ series, scope, loading, incomplete, hasPlan 
             {hasProjection && (
               <Line name="Projection" dataKey="projected" stroke={chartColor(3)} strokeWidth={2} strokeDasharray="2 4" dot={false} connectNulls isAnimationActive={false} />
             )}
-            <Line name="Recorded spending" dataKey="actual" stroke={chartColor(1)} strokeWidth={2.5} dot={false} connectNulls={false} isAnimationActive={false} />
+            <Line name="Recorded spending" type="stepAfter" dataKey="actual" stroke={chartColor(1)} strokeWidth={2.5} dot={false} connectNulls={false} isAnimationActive={false} />
           </LineChart>
         </ResponsiveContainer>
       </div>

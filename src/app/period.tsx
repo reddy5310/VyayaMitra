@@ -9,14 +9,15 @@
  */
 /* eslint-disable react-refresh/only-export-components -- contract file: hooks and components live together */
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Landmark } from 'lucide-react';
 import type { IsoDate } from '@/domain/types';
 import { dataRange, defaultPeriod, resolvePeriod, type Period, type PeriodPreset } from '@/engine/analytics';
-import { useStatements, useTransactions } from '@/db/hooks';
+import { useAccounts, useStatements, useTransactions } from '@/db/hooks';
 import { addMonths, formatMonth, isIsoDate, monthEnd, monthKey, monthStart, todayIso } from '@/lib/dates';
 import { Button, Field, IconButton, Input, Menu, Notice, Sheet, cn } from '@/ui';
 
 export const PERIOD_STORAGE_KEY = 'vm-period';
+export const SCOPE_STORAGE_KEY = 'vm-scope';
 
 type PresetChoice = Exclude<PeriodPreset, 'custom'>;
 
@@ -31,6 +32,9 @@ export interface PeriodState {
   /** Whether there is a month to step to; the picker disables its arrows otherwise. */
   canStepPrev: boolean;
   canStepNext: boolean;
+  /** Account scope shared by every screen: null = all accounts, otherwise only these ids. */
+  accountIds: string[] | null;
+  setAccountIds: (ids: string[] | null) => void;
 }
 
 type Choice = { preset: PresetChoice } | { preset: 'custom'; start: IsoDate; end: IsoDate };
@@ -61,6 +65,24 @@ export function readStoredChoice(): Choice | null {
     return PRESETS.includes(v.preset as PresetChoice) ? { preset: v.preset as PresetChoice } : null;
   } catch {
     return null;
+  }
+}
+
+function readStoredScope(): string[] | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(SCOPE_STORAGE_KEY) ?? 'null') as unknown;
+    return Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string') ? (v as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeScope(ids: string[] | null): void {
+  try {
+    if (ids) localStorage.setItem(SCOPE_STORAGE_KEY, JSON.stringify(ids));
+    else localStorage.removeItem(SCOPE_STORAGE_KEY);
+  } catch {
+    /* session only */
   }
 }
 
@@ -101,6 +123,7 @@ export function PeriodProvider({ children }: { children: ReactNode }) {
   const statementsKey = statements ? statements.map((st) => `${st.id}:${st.periodEnd ?? ''}`).sort().join('|') : '';
   const [choice, setChoice] = useState<Choice | null>(readStoredChoice);
   const [today, setToday] = useState<IsoDate>(() => todayIso());
+  const [accountIds, setScope] = useState<string[] | null>(readStoredScope);
 
   // A phone left open overnight should roll over to the new day.
   useEffect(() => {
@@ -175,9 +198,15 @@ export function PeriodProvider({ children }: { children: ReactNode }) {
     [period.start, period.end, commit],
   );
 
+  const setAccountIds = useCallback((ids: string[] | null) => {
+    const next = ids && ids.length > 0 ? [...ids].sort() : null;
+    setScope((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+    storeScope(next);
+  }, []);
+
   const value = useMemo<PeriodState>(
-    () => ({ period, setPreset, setCustom, stepMonth, isSingleMonth, canStepPrev, canStepNext }),
-    [period, setPreset, setCustom, stepMonth, isSingleMonth, canStepPrev, canStepNext],
+    () => ({ period, setPreset, setCustom, stepMonth, isSingleMonth, canStepPrev, canStepNext, accountIds, setAccountIds }),
+    [period, setPreset, setCustom, stepMonth, isSingleMonth, canStepPrev, canStepNext, accountIds, setAccountIds],
   );
   return <PeriodContext.Provider value={value}>{children}</PeriodContext.Provider>;
 }
@@ -206,7 +235,7 @@ export function PeriodPicker({ className }: { className?: string }) {
   const arrow = 'min-h-10 min-w-10 coarse:min-h-touch coarse:min-w-touch';
   return (
     <div
-      className={cn('inline-flex items-center gap-0.5 rounded-xl border border-border bg-surface p-0.5 shadow-card', className)}
+      className={cn('inline-flex max-w-full items-center gap-0.5 rounded-xl border border-border bg-surface p-0.5 shadow-card', className)}
       role="group"
       aria-label="Reporting period"
     >
@@ -218,14 +247,15 @@ export function PeriodPicker({ className }: { className?: string }) {
       <Menu
         label="Choose period"
         align="start"
+        className="min-w-0 flex-1"
         trigger={(p) => (
           <button
             {...p}
             type="button"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg px-2.5 text-sm font-semibold text-fg transition-colors hover:bg-surface-2 coarse:min-h-touch"
+            className="inline-flex min-h-10 w-full min-w-0 items-center gap-2 rounded-lg px-2.5 text-left text-sm font-semibold leading-tight text-fg transition-colors hover:bg-surface-2 coarse:min-h-touch"
           >
-            <Calendar className="h-4 w-4 text-fg-muted" aria-hidden />
-            <span className="whitespace-nowrap">{period.label}</span>
+            <Calendar className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+            <span className="min-w-0 sm:whitespace-nowrap">{period.label}</span>
           </button>
         )}
         items={[
@@ -270,5 +300,96 @@ export function PeriodPicker({ className }: { className?: string }) {
         </div>
       </Sheet>
     </div>
+  );
+}
+
+/**
+ * Account scope control: "All accounts", one account, or several. Shared by every screen through
+ * usePeriod().accountIds. Hidden when there is at most one account (nothing to choose).
+ */
+export function AccountScopePicker({ className }: { className?: string }) {
+  const { accountIds, setAccountIds } = usePeriod();
+  const accounts = useAccounts();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<string[]>([]);
+  const list = useMemo(() => (accounts ?? []).filter((a) => !a.archived || accountIds?.includes(a.id)), [accounts, accountIds]);
+
+  // Forget accounts that no longer exist (deleted, or restored from another backup).
+  useEffect(() => {
+    if (!accounts || !accountIds) return;
+    const known = accountIds.filter((id) => accounts.some((a) => a.id === id));
+    if (known.length !== accountIds.length) setAccountIds(known.length ? known : null);
+  }, [accounts, accountIds, setAccountIds]);
+
+  if (!accounts || accounts.length < 2) return null;
+
+  const label =
+    !accountIds || accountIds.length === 0
+      ? 'All accounts'
+      : accountIds.length === 1
+        ? (accounts.find((a) => a.id === accountIds[0])?.name ?? '1 account')
+        : `${accountIds.length} accounts`;
+
+  const openSheet = () => {
+    setDraft(accountIds ?? list.map((a) => a.id));
+    setOpen(true);
+  };
+  const apply = () => {
+    setAccountIds(draft.length === 0 || draft.length === list.length ? null : draft);
+    setOpen(false);
+  };
+  const toggle = (id: string) => setDraft((d) => (d.includes(id) ? d.filter((x) => x !== id) : [...d, id]));
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openSheet}
+        aria-haspopup="dialog"
+        className={cn(
+          'inline-flex min-h-10 max-w-full items-center gap-2 rounded-xl border border-border bg-surface px-3 text-sm font-semibold text-fg shadow-card transition-colors hover:bg-surface-2 coarse:min-h-touch',
+          className,
+        )}
+      >
+        <Landmark className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+        <span className="min-w-0 truncate">{label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden />
+      </button>
+      <Sheet
+        open={open}
+        onClose={() => setOpen(false)}
+        title="Which accounts?"
+        description="Every screen follows this choice."
+        size="sm"
+        footer={
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button variant="secondary" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={apply} disabled={draft.length === 0}>
+              Apply
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-1">
+          <label className="flex min-h-touch items-center gap-3 rounded-xl px-2 text-sm font-medium hover:bg-surface-2">
+            <input
+              type="checkbox"
+              className="h-5 w-5 accent-[rgb(var(--primary))]"
+              checked={draft.length === list.length}
+              onChange={(e) => setDraft(e.target.checked ? list.map((a) => a.id) : [])}
+            />
+            All accounts
+          </label>
+          {list.map((a) => (
+            <label key={a.id} className="flex min-h-touch items-center gap-3 rounded-xl px-2 text-sm hover:bg-surface-2">
+              <input type="checkbox" className="h-5 w-5 accent-[rgb(var(--primary))]" checked={draft.includes(a.id)} onChange={() => toggle(a.id)} />
+              <span className="min-w-0 break-words">{a.name}</span>
+            </label>
+          ))}
+        </div>
+      </Sheet>
+    </>
   );
 }

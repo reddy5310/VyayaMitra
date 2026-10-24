@@ -13,8 +13,11 @@ import {
   Switch,
   TabPanel,
   Tabs,
+  MeterBar,
   Money,
   PrivacyContext,
+  maskAmount,
+  useAmountFormatter,
   Button,
 } from '.';
 
@@ -249,5 +252,44 @@ describe('Money privacy', () => {
     );
     expect(screen.queryByText(/1,234\.56/)).not.toBeInTheDocument();
     expect(within(document.body).getByLabelText('Amount hidden')).toBeInTheDocument();
+  });
+});
+
+describe('amount masking helpers', () => {
+  it('maskAmount and useAmountFormatter hide text only when amounts are hidden', () => {
+    expect(maskAmount('₹1,200', true)).toBe('••••');
+    expect(maskAmount('₹1,200', false)).toBe('₹1,200');
+    function Tick() {
+      const fmt = useAmountFormatter();
+      return <span>{fmt('₹1,200')}</span>;
+    }
+    const { rerender } = render(<Tick />);
+    expect(screen.getByText('₹1,200')).toBeInTheDocument();
+    rerender(
+      <PrivacyContext.Provider value={{ hideAmounts: true }}>
+        <Tick />
+      </PrivacyContext.Provider>,
+    );
+    expect(screen.getByText('••••')).toBeInTheDocument();
+  });
+});
+
+describe('MeterBar', () => {
+  it('never changes colour by percentage; the caller sets the tone', () => {
+    const fill = (c: HTMLElement) => c.querySelector('[role="meter"] > div') as HTMLElement;
+    const { container, rerender } = render(<MeterBar label="Groceries" value={96} target={100} format={(n) => `${n}`} />);
+    expect(fill(container).className).toContain('bg-primary');
+    expect(fill(container).className).not.toContain('bg-warning');
+    rerender(<MeterBar label="Groceries" value={96} target={100} tone="warning" format={(n) => `${n}`} />);
+    expect(fill(container).className).toContain('bg-warning');
+  });
+
+  it('shows the excess beyond target with text, a limit marker and a valid meter range', () => {
+    render(<MeterBar label="Dining" value={130} target={100} expected={60} format={(n) => `${n}`} />);
+    const meter = screen.getByRole('meter', { name: 'Dining' });
+    expect(meter).toHaveAttribute('aria-valuemax', '130');
+    expect(meter).toHaveAttribute('aria-valuenow', '130');
+    expect(meter.getAttribute('aria-valuetext')).toContain('30 over');
+    expect(screen.getByText(/130 of 100, 30 over/)).toBeInTheDocument();
   });
 });

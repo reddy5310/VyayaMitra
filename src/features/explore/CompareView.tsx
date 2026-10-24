@@ -1,16 +1,27 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { addDays, addMonths, daysBetween, formatDate, formatMonth, minIso, monthEnd, monthKey, monthStart } from '@/lib/dates';
+import { ArrowRight, Target } from 'lucide-react';
 import { activityLink } from '@/app/routes';
 import { categoryById, categoryName } from '@/domain/categories';
-import { compareSpending, type WaterfallStep } from '@/engine/analytics';
-import { formatINR } from '@/lib/money';
+import type { Transaction } from '@/domain/types';
+import * as analytics from '@/engine/analytics';
 import { ChartFrame, Money, Notice, chartColor, cn } from '@/ui';
 import { tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt, useMask } from './useExploreData';
+import { planBudgetLink } from './views';
+
+type Explanation = analytics.ChangeExplanation;
+type ExplainCtx = Parameters<typeof analytics.explainChange>[1];
+
+function explain(txns: readonly Transaction[], ctx: ExplainCtx): Explanation {
+  return analytics.explainChange(txns, ctx);
+}
 
 interface Bar {
   key: string;
   label: string;
+  category?: string;
   from: number;
   to: number;
   delta?: number;
@@ -19,16 +30,37 @@ interface Bar {
   ids?: string[];
 }
 
-function stepIds(s: WaterfallStep): string[] {
-  return [...s.txnIdsCurrent, ...s.txnIdsPrevious];
-}
+const sign = (n: number) => (n >= 0 ? '+' : '−');
 
 export default function CompareView() {
+  const fmt = useFmt();
+  const mask = useMask();
   const { accounts, statements, transactions, customCategories, period, today, scope } = useExploreData();
-  const cmp = useMemo(
-    () => compareSpending(transactions, { accounts, statements, current: { start: period.start, end: period.end }, today, maxSteps: 6 }),
-    [transactions, accounts, statements, period.start, period.end, today],
+  const [focus, setFocus] = useState<string | undefined>();
+
+  // When the selected month is only partly covered, compare equivalent elapsed days (1–24 Oct with 1–24 Sep)
+  // instead of stopping at "not comparable" — the review's rule: complete periods, or equivalent elapsed periods.
+  const ranges = useMemo(() => {
+    const whole = { current: { start: period.start, end: period.end }, previous: undefined as undefined | { start: string; end: string }, elapsed: false };
+    if (monthKey(period.start) !== monthKey(period.end)) return whole;
+    const through = analytics.dataStatus(accounts, statements, transactions, today).dataThrough;
+    if (!through || through < period.start || through >= period.end) return whole;
+    const prevMonth = addMonths(monthKey(period.start), -1);
+    const prevStart = monthStart(prevMonth);
+    const prevEnd = minIso(addDays(prevStart, daysBetween(period.start, through)), monthEnd(prevMonth));
+    return { current: { start: period.start, end: through }, previous: { start: prevStart, end: prevEnd }, elapsed: true };
+  }, [accounts, statements, transactions, today, period.start, period.end]);
+
+  const exp = useMemo(
+    () => explain(transactions, { accounts, statements, current: ranges.current, previous: ranges.previous, today, category: focus, maxMerchants: 8 }),
+    [transactions, accounts, statements, ranges, today, focus],
   );
+  // The waterfall keeps showing every category so the user can switch focus; only the merchants follow `focus`.
+  const cmp = useMemo(
+    () => analytics.compareSpending(transactions, { accounts, statements, current: ranges.current, previous: ranges.previous, today, maxSteps: 6 }),
+    [transactions, accounts, statements, ranges, today],
+  );
+  const comparable = cmp.comparable && exp.comparable;
 
   const bars: Bar[] = useMemo(() => {
     const out: Bar[] = [{ key: 'prev', label: cmp.previous.label, from: 0, to: cmp.previous.total, total: true, color: 'rgb(var(--chart-neutral))' }];
@@ -36,7 +68,7 @@ export default function CompareView() {
     for (const s of cmp.steps) {
       const label = s.category ? categoryName(s.category, customCategories) : s.label;
       const color = s.category ? chartColor(categoryById(s.category, customCategories).colorIndex) : 'rgb(var(--chart-neutral))';
-      out.push({ key: s.key, label, from: run, to: run + s.delta, delta: s.delta, color, ids: stepIds(s) });
+      out.push({ key: s.key, label, category: s.category, from: run, to: run + s.delta, delta: s.delta, color, ids: [...s.txnIdsCurrent, ...s.txnIdsPrevious] });
       run += s.delta;
     }
     if (cmp.other !== 0) {
@@ -49,27 +81,24 @@ export default function CompareView() {
 
   const scale = Math.max(1, ...bars.flatMap((b) => [b.from, b.to]));
   const diff = cmp.current.total - cmp.previous.total;
-  const biggest = [...cmp.steps].sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
-  const takeaway =
-    cmp.comparable && cmp.steps.length > 0
-      ? `You spent ${formatINR(Math.abs(diff), { whole: true })} ${diff >= 0 ? 'more' : 'less'} than in ${cmp.previous.label}${
-          biggest ? `, mostly from ${biggest.category ? categoryName(biggest.category, customCategories) : biggest.label}` : ''
-        }.`
-      : undefined;
+  const focusName = focus ? categoryName(focus, customCategories) : undefined;
+  const action = exp.suggestedAction;
 
   return (
     <div className="space-y-3">
-      {!cmp.comparable && (
-        <Notice tone="warning" title="These periods cannot be compared fairly yet">
-          {cmp.note ?? 'At least one of the periods is not fully covered by statements, so a change would be misleading.'}
+      {ranges.elapsed && comparable && (
+        <Notice tone="info">
+          {formatMonth(monthKey(period.start))} is only covered through {formatDate(ranges.current.end)}, so this compares the same number of
+          days: {formatDate(ranges.current.start, { short: true })}–{formatDate(ranges.current.end, { short: true })} with{' '}
+          {formatDate(ranges.previous!.start, { short: true })}–{formatDate(ranges.previous!.end, { short: true })}.
         </Notice>
       )}
       <ChartFrame
-        question={`What changed in spending between ${cmp.previous.label} and ${cmp.current.label}?`}
-        scope={`${scope} · ${cmp.basis}`}
-        takeaway={takeaway}
-        status={cmp.comparable ? 'complete' : 'incomplete'}
-        statusNote={cmp.note}
+        question={`Why did spending change between ${cmp.previous.label} and ${cmp.current.label}?`}
+        scope={comparable ? `${scope} · ${cmp.basis}` : scope}
+        takeaway={comparable && exp.headline ? mask(exp.headline) : undefined}
+        status={comparable ? 'complete' : 'incomplete'}
+        statusNote={mask(cmp.note ?? 'At least one of the periods is not fully covered by statements, so a change would be misleading.')}
         table={
           <table className="w-full text-sm">
             <thead>
@@ -82,50 +111,89 @@ export default function CompareView() {
             <tbody>
               {bars.map((b) => (
                 <tr key={b.key}>
-                  <td className={tableCell}>{b.ids?.length ? <Link className="text-primary hover:underline" to={activityLink({ ids: b.ids })}>{b.label}</Link> : b.label}</td>
-                  <td className={tableNum}>{b.total ? '' : `${(b.delta ?? 0) >= 0 ? '+' : '−'}${formatINR(Math.abs(b.delta ?? 0))}`}</td>
-                  <td className={tableNum}>{formatINR(b.to)}</td>
+                  <td className={tableCell}>
+                    {b.ids?.length ? (
+                      <Link className="text-primary hover:underline" to={activityLink({ ids: b.ids })}>
+                        {b.label}
+                      </Link>
+                    ) : (
+                      b.label
+                    )}
+                  </td>
+                  <td className={tableNum}>{b.total ? '' : `${sign(b.delta ?? 0)}${fmt(Math.abs(b.delta ?? 0))}`}</td>
+                  <td className={tableNum}>{fmt(b.to)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         }
       >
-        {cmp.comparable ? (
-          <ol aria-label="Waterfall from the previous total to the current total" className="space-y-1">
-            {bars.map((b) => {
-              const left = (Math.min(b.from, b.to) / scale) * 100;
-              const width = Math.max(1.5, (Math.abs(b.to - b.from) / scale) * 100);
-              const body = (
-                <>
-                  <span className="flex items-baseline justify-between gap-2 text-sm">
-                    <span className="truncate font-medium text-fg">{b.label}</span>
-                    <span className={cn('shrink-0 tabular-nums', b.total ? 'text-fg' : (b.delta ?? 0) > 0 ? 'text-negative' : 'text-positive')}>
-                      {b.total ? <Money value={b.to} whole /> : `${(b.delta ?? 0) >= 0 ? '+' : '−'}${formatINR(Math.abs(b.delta ?? 0), { whole: true })}`}
+        {comparable ? (
+          <>
+            <p className="mb-3 text-sm text-fg-muted">
+              Total change{' '}
+              <span className={cn('font-semibold tabular-nums', diff > 0 ? 'text-negative' : 'text-positive')}>
+                {sign(diff)}
+                <Money value={Math.abs(diff)} whole />
+              </span>{' '}
+              ({cmp.previous.label} <Money value={cmp.previous.total} whole /> to {cmp.current.label} <Money value={cmp.current.total} whole />). Tap a category to see what drove it.
+            </p>
+            <ol aria-label="Waterfall from the previous total to the current total" className="space-y-1">
+              {bars.map((b) => {
+                const left = (Math.min(b.from, b.to) / scale) * 100;
+                const width = Math.max(1.5, (Math.abs(b.to - b.from) / scale) * 100);
+                const body = (
+                  <>
+                    <span className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="truncate font-medium text-fg">{b.label}</span>
+                      <span className={cn('shrink-0 tabular-nums', b.total ? 'text-fg' : (b.delta ?? 0) > 0 ? 'text-negative' : 'text-positive')}>
+                        {b.total ? (
+                          <Money value={b.to} whole />
+                        ) : (
+                          <>
+                            {sign(b.delta ?? 0)}
+                            <Money value={Math.abs(b.delta ?? 0)} whole />
+                          </>
+                        )}
+                      </span>
                     </span>
-                  </span>
-                  <span className="relative mt-1 block h-3 rounded-full bg-surface-2" aria-hidden>
-                    <span className="absolute top-0 block h-3 rounded-full" style={{ left: `${left}%`, width: `${width}%`, background: b.color }} />
-                  </span>
-                </>
-              );
-              return (
-                <li key={b.key}>
-                  {b.ids?.length ? (
-                    <Link
-                      to={activityLink({ ids: b.ids })}
-                      aria-label={`${b.label}: ${(b.delta ?? 0) >= 0 ? 'up' : 'down'} ${formatINR(Math.abs(b.delta ?? 0), { whole: true })}. See the transactions behind this step`}
-                      className="block rounded-xl px-2 py-1.5 hover:bg-surface-2 focus-visible:outline focus-visible:outline-2"
-                    >
-                      {body}
-                    </Link>
-                  ) : (
-                    <div className="px-2 py-1.5">{body}</div>
-                  )}
-                </li>
-              );
-            })}
-          </ol>
+                    <span className="relative mt-1 block h-3 rounded-full bg-surface-2" aria-hidden>
+                      <span className="absolute top-0 block h-3 rounded-full" style={{ left: `${left}%`, width: `${width}%`, background: b.color }} />
+                    </span>
+                  </>
+                );
+                const selected = !!b.category && focus === b.category;
+                return (
+                  <li key={b.key} className="flex items-center gap-1">
+                    {b.category ? (
+                      <button
+                        type="button"
+                        aria-pressed={selected}
+                        aria-label={`${b.label}: ${(b.delta ?? 0) >= 0 ? 'up' : 'down'} ${fmt(Math.abs(b.delta ?? 0), { whole: true })}. ${selected ? 'Showing its merchants, tap to show all' : 'Show what drove this'}`}
+                        onClick={() => setFocus(selected ? undefined : b.category)}
+                        className={cn('block min-h-touch flex-1 rounded-xl px-2 py-1.5 text-left hover:bg-surface-2 focus-visible:outline focus-visible:outline-2', selected && 'bg-primary-soft')}
+                      >
+                        {body}
+                      </button>
+                    ) : (
+                      <div className="flex-1 px-2 py-1.5">{body}</div>
+                    )}
+                    {b.ids?.length ? (
+                      <Link
+                        to={activityLink({ ids: b.ids })}
+                        aria-label={`See transactions for ${b.label}`}
+                        className="flex h-touch w-touch shrink-0 items-center justify-center rounded-lg text-primary hover:bg-surface-2"
+                      >
+                        <ArrowRight className="h-4 w-4" aria-hidden />
+                      </Link>
+                    ) : (
+                      <span className="w-touch shrink-0" aria-hidden />
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </>
         ) : (
           <dl className="grid grid-cols-2 gap-3 text-sm">
             {[cmp.previous, cmp.current].map((p) => (
@@ -140,6 +208,65 @@ export default function CompareView() {
           </dl>
         )}
       </ChartFrame>
+
+      {comparable && exp.merchants.length > 0 && (
+        <section aria-labelledby="merchant-drivers" className="rounded-2xl border border-border bg-surface p-4 shadow-card sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 id="merchant-drivers" className="text-base font-semibold text-fg">
+              {focusName ? `Which ${focusName} merchants changed most?` : 'Which merchants changed most?'}
+            </h2>
+            {focus && (
+              <button type="button" onClick={() => setFocus(undefined)} className="min-h-touch rounded-lg px-2 text-sm font-medium text-primary hover:bg-surface-2">
+                Show all categories
+              </button>
+            )}
+          </div>
+          <ol aria-label="Merchants driving the change" className="mt-2 divide-y divide-border">
+            {exp.merchants.map((m) => {
+              const ids = [...m.txnIdsCurrent, ...m.txnIdsPrevious];
+              const dCount = m.current.count - m.previous.count;
+              return (
+                <li key={`${m.category}:${m.merchant}`}>
+                  <Link
+                    to={activityLink({ ids })}
+                    aria-label={`${m.merchant}: ${mask(m.sentence)} See transactions`}
+                    className="block min-h-touch rounded-xl px-1 py-2 hover:bg-surface-2 focus-visible:outline focus-visible:outline-2"
+                  >
+                    <span className="flex items-baseline justify-between gap-2 text-sm">
+                      <span className="truncate font-medium text-fg">{m.merchant}</span>
+                      <span className={cn('shrink-0 tabular-nums', m.delta > 0 ? 'text-negative' : 'text-positive')}>
+                        {sign(m.delta)}
+                        <Money value={Math.abs(m.delta)} whole />
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-sm text-fg-muted">{mask(m.sentence)}</span>
+                    <span className="mt-0.5 block text-xs tabular-nums text-fg-muted">
+                      {sign(dCount)}
+                      {Math.abs(dCount)} order{Math.abs(dCount) === 1 ? '' : 's'} <Money value={Math.abs(m.frequencyEffect)} whole /> · {m.sizeEffect >= 0 ? 'larger' : 'smaller'} orders{' '}
+                      <Money value={Math.abs(m.sizeEffect)} whole />
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ol>
+
+          <div className="mt-3 flex flex-wrap gap-2 border-t border-border pt-3">
+            {action && (
+              <Link
+                to={planBudgetLink({ category: action.category, target: action.suggestedTarget })}
+                className="inline-flex min-h-touch items-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-fg hover:bg-primary/90"
+              >
+                <Target className="h-4 w-4" aria-hidden />
+                {(action.label && mask(action.label)) ?? `Set a limit for ${categoryName(action.category, customCategories)}`}
+              </Link>
+            )}
+            <Link to={planBudgetLink({ scenario: true })} className="inline-flex min-h-touch items-center rounded-xl border border-border-strong px-4 text-sm font-medium text-fg hover:bg-surface-2">
+              Try a scenario
+            </Link>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

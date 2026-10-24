@@ -105,6 +105,8 @@ export interface CommitChoices {
   replaceStatementId?: string;
   /** Row indexes the user chose to leave out. */
   excludeRowIndexes?: number[];
+  /** Rows flagged as duplicates of an existing transaction that the user chose to keep anyway ("Keep both"). */
+  keepDuplicateIndexes?: number[];
 }
 
 export interface ImportResult {
@@ -359,6 +361,7 @@ export async function commitImport(preview: ImportPreview, choices: CommitChoice
   const rows = preview.parsed.rows;
   if (rows.length === 0) throw new ValidationError('This statement has no transactions to import.');
   const exclude = new Set(choices.excludeRowIndexes ?? []);
+  const keepDuplicates = new Set(choices.keepDuplicateIndexes ?? []);
 
   return writeAll(async () => {
     const now = nowTimestamp();
@@ -422,7 +425,18 @@ export async function commitImport(preview: ImportPreview, choices: CommitChoice
     let firstDuplicateStatement: string | undefined;
     for (let i = 0; i < rows.length; i++) {
       if (exclude.has(i)) continue;
-      const fp = fingerprints[i];
+      let fp = fingerprints[i];
+      if (keepDuplicates.has(i) && (stored.has(fp) || seen.has(fp))) {
+        // "Keep both": a distinct, still-deterministic identity so the unique index allows it.
+        // A re-import of the same file still matches the original fingerprint and dedupes.
+        for (let n = 1; ; n++) {
+          const candidate = `${fp}:kept:${n}`;
+          if (seen.has(candidate)) continue;
+          if ((await db.transactions.where('[accountId+fingerprint]').equals([account.id, candidate]).count()) > 0) continue;
+          fingerprints[i] = fp = candidate;
+          break;
+        }
+      }
       if (stored.has(fp) || seen.has(fp)) {
         skippedDuplicates++;
         firstDuplicateStatement ??= stored.get(fp);

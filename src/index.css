@@ -149,8 +149,17 @@
     outline: 2px solid rgb(var(--focus));
     outline-offset: 2px;
   }
+  /* Reflow safety net: grid and flex children may shrink below their content, so long names, amounts and
+     large text wrap instead of forcing a horizontal page scroll (WCAG 1.4.10). */
+  main :where(.grid, .flex) > * {
+    min-width: 0;
+  }
   dialog {
     color: inherit;
+  }
+  /* Browsers give fieldsets min-width: min-content, which causes sideways scrolling on narrow screens. */
+  fieldset {
+    min-width: 0;
   }
   dialog::backdrop {
     background: rgb(2 6 15 / 0.5);

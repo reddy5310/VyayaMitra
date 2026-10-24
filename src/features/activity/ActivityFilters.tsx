@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { ListFilter, Search, X } from 'lucide-react';
 import { CATEGORY_GROUP_LABELS, allCategories, categoryName } from '@/domain/categories';
 import { KIND_LABELS } from '@/domain/kinds';
-import type { Account, CategoryGroup, CustomCategory } from '@/domain/types';
+import type { Account, CategoryGroup, CustomCategory, Statement } from '@/domain/types';
+import { formatDate } from '@/lib/dates';
 import { Badge, Button, Input, Select, cn } from '@/ui';
-import { activeFilterCount, type ActivityFilters as Filters } from './useActivityFilters';
+import { KIND_GROUP_LABELS, activeFilterCount, amountToPaise, type ActivityFilters as Filters, type KindGroup } from './useActivityFilters';
 
 const SEARCH_DEBOUNCE_MS = 200;
 
@@ -44,6 +45,8 @@ export function ActivityFilters({
   filters,
   accounts,
   customCategories,
+  merchants,
+  statements,
   onChange,
   onClearAll,
   searchRef,
@@ -51,12 +54,27 @@ export function ActivityFilters({
   filters: Filters;
   accounts: readonly Account[];
   customCategories: readonly CustomCategory[];
+  /** Every merchant in the ledger, for the searchable merchant filter. */
+  merchants: readonly { key: string; name: string }[];
+  statements: readonly Statement[];
   onChange: (patch: Partial<Filters>) => void;
   onClearAll: () => void;
   /** Lets the page focus the search box (the `/` shortcut). */
   searchRef?: RefObject<HTMLInputElement>;
 }) {
   const [search, setSearch] = useDebouncedField(filters.q, (q) => onChange({ q }));
+  const [minText, setMinText] = useDebouncedField(filters.min, (min) => onChange({ min }));
+  const [maxText, setMaxText] = useDebouncedField(filters.max, (max) => onChange({ max }));
+  const advancedActive = Boolean(filters.kindGroup || filters.min || filters.max || filters.merchant || filters.statementId || filters.recurring);
+  const [more, setMore] = useState(false);
+  const moreOpen = more || advancedActive;
+  const merchantName = merchants.find((m) => m.key === filters.merchant)?.name ?? '';
+  const [merchantText, setMerchantText] = useState(merchantName);
+  useEffect(() => setMerchantText(merchantName), [merchantName]);
+  const statementName = (id: string) => {
+    const st = statements.find((x) => x.id === id);
+    return st ? st.fileName : id;
+  };
   const [open, setOpen] = useState(false);
   const count = activeFilterCount(filters);
 
@@ -78,6 +96,12 @@ export function ActivityFilters({
   if (filters.category) chips.push({ key: 'category', label: `Category: ${categoryName(filters.category, customCategories)}`, remove: () => onChange({ category: '' }) });
   if (filters.kind) chips.push({ key: 'kind', label: `Type: ${KIND_LABELS[filters.kind]}`, remove: () => onChange({ kind: '' }) });
   if (filters.review) chips.push({ key: 'review', label: 'Needs review', remove: () => onChange({ review: false }) });
+  if (filters.kindGroup) chips.push({ key: 'group', label: `Money: ${KIND_GROUP_LABELS[filters.kindGroup]}`, remove: () => onChange({ kindGroup: '' }) });
+  if (filters.min.trim()) chips.push({ key: 'min', label: `At least ₹${filters.min.trim()}`, remove: () => { setMinText(''); onChange({ min: '' }); } });
+  if (filters.max.trim()) chips.push({ key: 'max', label: `At most ₹${filters.max.trim()}`, remove: () => { setMaxText(''); onChange({ max: '' }); } });
+  if (filters.merchant) chips.push({ key: 'merchant', label: `Merchant: ${merchantName || filters.merchant}`, remove: () => onChange({ merchant: '' }) });
+  if (filters.statementId) chips.push({ key: 'statement', label: `Import: ${statementName(filters.statementId)}`, remove: () => onChange({ statementId: '' }) });
+  if (filters.recurring) chips.push({ key: 'recurring', label: 'Recurring', remove: () => onChange({ recurring: false }) });
 
   return (
     <section aria-label="Filters" className="space-y-2">
@@ -147,6 +171,83 @@ export function ActivityFilters({
         >
           Needs review
         </Button>
+      </div>
+
+      <div>
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          aria-controls="activity-more-filters"
+          onClick={() => setMore((v) => !v)}
+          className="min-h-9 rounded-lg px-2 text-sm font-medium text-primary hover:bg-surface-2"
+        >
+          {moreOpen ? 'Fewer filters' : 'More filters'}
+        </button>
+        <div id="activity-more-filters" hidden={!moreOpen} className="mt-2 grid gap-2 sm:grid-cols-3">
+          <Select aria-label="Money group" value={filters.kindGroup} onChange={(e) => onChange({ kindGroup: e.target.value as KindGroup | '' })}>
+            <option value="">Spending, income, transfers…</option>
+            {(Object.keys(KIND_GROUP_LABELS) as KindGroup[]).map((g) => (
+              <option key={g} value={g}>
+                {KIND_GROUP_LABELS[g]}
+              </option>
+            ))}
+          </Select>
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              aria-label="Minimum amount in rupees"
+              inputMode="decimal"
+              placeholder="Min ₹"
+              autoComplete="off"
+              aria-invalid={minText.trim() !== '' && amountToPaise(minText) === null}
+              value={minText}
+              onChange={(e) => setMinText(e.target.value)}
+            />
+            <Input
+              aria-label="Maximum amount in rupees"
+              inputMode="decimal"
+              placeholder="Max ₹"
+              autoComplete="off"
+              aria-invalid={maxText.trim() !== '' && amountToPaise(maxText) === null}
+              value={maxText}
+              onChange={(e) => setMaxText(e.target.value)}
+            />
+          </div>
+          <div>
+            <Input
+              aria-label="Merchant"
+              list="activity-merchants"
+              placeholder="Search merchants"
+              autoComplete="off"
+              value={merchantText}
+              onChange={(e) => {
+                const text = e.target.value;
+                setMerchantText(text);
+                const hit = merchants.find((m) => m.name.toLowerCase() === text.trim().toLowerCase());
+                if (hit) onChange({ merchant: hit.key });
+                else if (!text.trim() && filters.merchant) onChange({ merchant: '' });
+              }}
+            />
+            <datalist id="activity-merchants">
+              {merchants.slice(0, 400).map((m) => (
+                <option key={m.key} value={m.name} />
+              ))}
+            </datalist>
+          </div>
+          <Select aria-label="Statement or import" value={filters.statementId} onChange={(e) => onChange({ statementId: e.target.value })}>
+            <option value="">All imports</option>
+            {[...statements]
+              .sort((a, b) => (b.importedAt ?? '').localeCompare(a.importedAt ?? ''))
+              .map((st) => (
+                <option key={st.id} value={st.id}>
+                  {st.fileName}
+                  {st.periodEnd ? ` (to ${formatDate(st.periodEnd)})` : ''}
+                </option>
+              ))}
+          </Select>
+          <Button variant={filters.recurring ? 'primary' : 'outline'} aria-pressed={filters.recurring} onClick={() => onChange({ recurring: !filters.recurring })}>
+            Recurring
+          </Button>
+        </div>
       </div>
 
       {chips.length > 0 && (

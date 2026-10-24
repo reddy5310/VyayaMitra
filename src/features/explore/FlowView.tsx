@@ -4,10 +4,9 @@ import { ResponsiveContainer, Sankey, Tooltip } from 'recharts';
 import { Info } from 'lucide-react';
 import { activityLink } from '@/app/routes';
 import { moneyFlow, type FlowNode } from '@/engine/analytics';
-import { formatINR } from '@/lib/money';
 import { ChartFrame, Money, SegmentedControl, chartColor, cn } from '@/ui';
 import { tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt, useMask } from './useExploreData';
 
 export const FLOW_DISCLAIMER = 'Flows show where recorded money went. They do not prove which rupee paid for which purchase.';
 
@@ -44,6 +43,8 @@ function SankeyNode(props: { x?: number; y?: number; width?: number; height?: nu
 }
 
 export default function FlowView() {
+  const fmt = useFmt();
+  const mask = useMask();
   const { accounts, periodTxns, period, scope } = useExploreData();
   const [view, setView] = useState<'spending' | 'transfers'>('spending');
 
@@ -62,7 +63,7 @@ export default function FlowView() {
 
   const biggest = links[0];
   const takeaway = biggest
-    ? `The largest recorded flow is ${byId.get(biggest.from)!.label} → ${byId.get(biggest.to)!.label}: ${formatINR(biggest.amount, { whole: true })}.`
+    ? `The largest recorded flow is ${byId.get(biggest.from)!.label} → ${byId.get(biggest.to)!.label}: ${fmt(biggest.amount, { whole: true })}.`
     : undefined;
   const hasUnexplained = flow.nodes.some((n) => n.kind === 'unexplained');
 
@@ -108,7 +109,7 @@ export default function FlowView() {
                     {byId.get(l.to)!.label}
                   </Link>
                 </td>
-                <td className={tableNum}>{formatINR(l.amount)}</td>
+                <td className={tableNum}>{fmt(l.amount)}</td>
               </tr>
             ))}
           </tbody>
@@ -118,7 +119,7 @@ export default function FlowView() {
       <p role="note" className="mb-3 flex items-start gap-2 rounded-xl bg-surface-2 px-3 py-2 text-sm text-fg-muted">
         <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
         <span>
-          {flow.note} {FLOW_DISCLAIMER}
+          {mask(flow.note)} {FLOW_DISCLAIMER}
         </span>
       </p>
 
@@ -144,7 +145,7 @@ export default function FlowView() {
       <div role="img" aria-label={`Sankey diagram of ${links.length} flows. The same data is in the table below.`} className="hidden h-96 w-full sm:block">
         <ResponsiveContainer width="100%" height="100%">
           <Sankey data={sankey} node={<SankeyNode />} nodePadding={18} margin={{ left: 8, right: 120, top: 8, bottom: 8 }} link={{ stroke: 'rgb(var(--border-strong))', strokeOpacity: 0.5 }}>
-            <Tooltip formatter={(v: number) => formatINR(v)} />
+            <Tooltip formatter={(v: number) => fmt(v)} />
           </Sankey>
         </ResponsiveContainer>
       </div>

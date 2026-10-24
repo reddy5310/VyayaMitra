@@ -337,14 +337,15 @@ function GroupCard({
         </ul>
       )}
 
-      <fieldset>
-        <legend className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+      {/* fieldsets default to min-width: min-content, which forces sideways scrolling on narrow screens */}
+      <fieldset className="min-w-0">
+        <legend className="mb-1 max-w-full whitespace-normal text-xs font-semibold uppercase tracking-wide text-fg-muted">
           Rows this could change ({selectedIds.length} of {rows.length} selected)
         </legend>
         <ul className="divide-y divide-border rounded-xl border border-border">
           {shown.map((r) => (
             <li key={r.id}>
-              <label className="flex min-h-touch cursor-pointer items-center gap-3 px-3 py-2 text-sm">
+              <label className="flex min-h-touch cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
                 <input
                   type="checkbox"
                   className="h-5 w-5 shrink-0 accent-primary"
@@ -359,11 +360,11 @@ function GroupCard({
                   }
                   aria-label={`Include ${formatDate(r.date)} ${r.merchant}`}
                 />
-                <span className="min-w-0 flex-1">
+                <span className="min-w-0 flex-1 basis-40">
                   <span className="block truncate text-fg">{formatDate(r.date, { short: true })} · {accountNames.get(r.accountId) ?? 'Account'}</span>
                   <span className="block truncate font-mono text-xs text-fg-muted">{r.rawDescription}</span>
                 </span>
-                <Money value={r.amount} direction={r.direction} tone="direction" className="shrink-0 text-sm" />
+                <Money value={r.amount} direction={r.direction} tone="direction" className="ml-auto text-sm" />
               </label>
             </li>
           ))}
@@ -429,11 +430,11 @@ function GroupCard({
         <CorrectionPrompt
           change={correction.pending.label}
           merchant={lead.merchant}
-          otherCount={correction.otherCount}
+          merchantRows={correction.merchantRows}
           busy={correction.busy}
           error={correction.error}
           onChoose={correction.apply}
-          selectedCount={selectedIds.length}
+          selectedRows={rows.filter((r) => selected.has(r.id))}
           onChooseSelected={rows.length > 1 ? () => void correction.applySelected(selectedIds) : undefined}
           onCancel={correction.cancel}
         />

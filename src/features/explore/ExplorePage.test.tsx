@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Account, Transaction } from '@/domain/types';
-import { ToastProvider } from '@/ui';
+import { PrivacyContext, ToastProvider } from '@/ui';
 
 const hooks = vi.hoisted(() => ({ useLedger: vi.fn() }));
 vi.mock('@/db/hooks', () => hooks);
@@ -19,9 +19,11 @@ const analytics = vi.hoisted(() => ({
   summarize: vi.fn(),
   monthlySeries: vi.fn(),
   compareSpending: vi.fn(),
+  explainChange: vi.fn(),
   spendingCalendar: vi.fn(),
   merchantPareto: vi.fn(),
   moneyFlow: vi.fn(),
+  dataStatus: vi.fn(() => ({ dataThrough: null })),
 }));
 vi.mock('@/engine/analytics', () => analytics);
 
@@ -37,17 +39,31 @@ function Where() {
   const l = useLocation();
   return <output data-testid="where">{l.pathname + l.search}</output>;
 }
-function renderAt(url: string) {
+function renderAt(url: string, hideAmounts = false) {
   return render(
-    <ToastProvider>
-      <MemoryRouter initialEntries={[url]}>
-        <ExplorePage />
-        <Where />
-      </MemoryRouter>
-    </ToastProvider>,
+    <PrivacyContext.Provider value={{ hideAmounts }}>
+      <ToastProvider>
+        <MemoryRouter initialEntries={[url]}>
+          <ExplorePage />
+          <Where />
+        </MemoryRouter>
+      </ToastProvider>
+    </PrivacyContext.Provider>,
   );
 }
 const hrefOf = (el: Element) => el.getAttribute('href') ?? '';
+
+const comparison = {
+  current: { start: '2025-09-01', end: '2025-09-30', label: 'September', total: 5_000_000 },
+  previous: { start: '2025-08-01', end: '2025-08-31', label: 'August', total: 4_000_000 },
+  steps: [
+    { key: 'food', label: 'Food & dining', category: 'food_dining', delta: 800_000, txnIdsCurrent: ['c1', 'c2'], txnIdsPrevious: ['p1'] },
+    { key: 'travel', label: 'Travel & stays', category: 'travel', delta: -200_000, txnIdsCurrent: ['c3'], txnIdsPrevious: ['p2'] },
+  ],
+  other: 400_000,
+  basis: 'Comparing September with August (both fully covered)',
+  comparable: true,
+};
 
 const summaryFixture = {
   byCategory: [
@@ -71,17 +87,28 @@ beforeEach(() => {
     { month: '2025-08', income: 9_000_000, spending: 5_000_000, invested: 500_000, netSavings: 4_000_000, complete: false },
     { month: '2025-09', income: 9_500_000, spending: 4_500_000, invested: 800_000, netSavings: 5_000_000, complete: true },
   ]);
-  analytics.compareSpending.mockReturnValue({
-    current: { start: '2025-09-01', end: '2025-09-30', label: 'September', total: 5_000_000 },
-    previous: { start: '2025-08-01', end: '2025-08-31', label: 'August', total: 4_000_000 },
-    steps: [
-      { key: 'food', label: 'Food & dining', category: 'food_dining', delta: 800_000, txnIdsCurrent: ['c1', 'c2'], txnIdsPrevious: ['p1'] },
-      { key: 'travel', label: 'Travel & stays', category: 'travel', delta: -200_000, txnIdsCurrent: ['c3'], txnIdsPrevious: ['p2'] },
-    ],
-    other: 400_000,
-    basis: 'Comparing September with August (both fully covered)',
+  analytics.compareSpending.mockReturnValue(comparison);
+  analytics.explainChange.mockImplementation((_t: unknown, ctx: { category?: string }) => ({
+    comparison,
     comparable: true,
-  });
+    headline: ctx.category ? 'Food & dining rose ₹8,000, mostly from Swiggy.' : 'Spending rose ₹10,000, mostly from Food & dining.',
+    merchants: [
+      {
+        merchant: 'Swiggy',
+        category: 'food_dining',
+        current: { count: 10, total: 500_000, average: 50_000 },
+        previous: { count: 4, total: 200_000, average: 50_000 },
+        delta: 300_000,
+        frequencyEffect: 210_000,
+        sizeEffect: 30_000,
+        driver: 'frequency',
+        sentence: 'You ordered more often: 10 orders against 4.',
+        txnIdsCurrent: ['c1'],
+        txnIdsPrevious: ['p1'],
+      },
+    ],
+    suggestedAction: { category: 'food_dining', suggestedTarget: 400_000, label: 'Set a limit for Food & dining' },
+  }));
   analytics.spendingCalendar.mockReturnValue([
     { date: '2025-09-01', amount: 0, count: 0, covered: false },
     { date: '2025-09-02', amount: 0, count: 0, covered: true },
@@ -124,7 +151,7 @@ describe('Explore: view switching', () => {
 
   it.each([
     ['trends', 'Trends', /How do income, spending and investing compare/],
-    ['compare', 'Compare', /What changed in spending between August and September/],
+    ['compare', 'Compare', /Why did spending change between August and September/],
     ['flow', 'Money flow', /Where did the money that came in go/],
   ])('deep link ?view=%s opens that view', async (view, tab, heading) => {
     renderAt(`/explore?view=${view}`);
@@ -182,32 +209,55 @@ describe('Explore: trends', () => {
   });
 });
 
-describe('Explore: compare waterfall', () => {
-  it('each step routes to the transactions behind it', async () => {
+describe('Explore: compare, why did spending change', () => {
+  it('compares equivalent elapsed days when the month is only partly covered', async () => {
+    analytics.dataStatus.mockReturnValueOnce({ dataThrough: '2025-09-24' } as never);
     renderAt('/explore?view=compare');
-    const list = await screen.findByRole('list', { name: /Waterfall/ });
-    const food = within(list).getByRole('link', { name: /Food & dining: up ₹8,000/ });
-    expect(hrefOf(food)).toBe('/activity?ids=c1%2Cc2%2Cp1');
-    const travel = within(list).getByRole('link', { name: /Travel & stays: down ₹2,000/ });
-    expect(hrefOf(travel)).toBe('/activity?ids=c3%2Cp2');
-    expect(screen.getByText(/You spent ₹10,000 more than in August, mostly from Food & dining/)).toBeInTheDocument();
+    await screen.findByText(/compares the same number of days/);
+    expect(analytics.explainChange).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ current: { start: '2025-09-01', end: '2025-09-24' }, previous: { start: '2025-08-01', end: '2025-08-24' } }),
+    );
   });
 
-  it('when the periods are not comparable it says so and does not narrate a change', async () => {
-    analytics.compareSpending.mockReturnValue({
-      current: { start: '2025-09-01', end: '2025-09-30', label: 'September', total: 5_000_000 },
-      previous: { start: '2025-08-01', end: '2025-08-31', label: 'August', total: 1_000_000 },
-      steps: [],
-      other: 0,
-      basis: 'August is only partly covered',
-      comparable: false,
-      note: 'August has no statement for 1-20 Aug.',
-    });
+  it('walks headline, total change, waterfall, merchant drivers and planning actions, all linked', async () => {
     renderAt('/explore?view=compare');
-    expect(await screen.findByText('These periods cannot be compared fairly yet')).toBeInTheDocument();
+    expect(await screen.findByText('Spending rose ₹10,000, mostly from Food & dining.')).toBeInTheDocument();
+    expect(screen.getByText(/Total change/)).toBeInTheDocument();
+    const wf = screen.getByRole('list', { name: /Waterfall/ });
+    expect(hrefOf(within(wf).getByRole('link', { name: 'See transactions for Food & dining' }))).toBe('/activity?ids=c1%2Cc2%2Cp1');
+    expect(hrefOf(within(wf).getByRole('link', { name: 'See transactions for Travel & stays' }))).toBe('/activity?ids=c3%2Cp2');
+    const merchants = screen.getByRole('list', { name: /Merchants driving the change/ });
+    expect(within(merchants).getByText('You ordered more often: 10 orders against 4.')).toBeInTheDocument();
+    expect(within(merchants).getByText(/\+6 orders/)).toBeInTheDocument();
+    expect(within(merchants).getByText(/larger orders/)).toBeInTheDocument();
+    expect(hrefOf(within(merchants).getByRole('link'))).toBe('/activity?ids=c1%2Cp1');
+    expect(hrefOf(screen.getByRole('link', { name: /Set a limit for Food & dining/ }))).toBe('/plan?tab=budgets&category=food_dining&target=400000');
+    expect(hrefOf(screen.getByRole('link', { name: 'Try a scenario' }))).toBe('/plan?tab=budgets&scenario=1');
+  });
+
+  it('tapping a waterfall step focuses that category in explainChange', async () => {
+    const user = userEvent.setup();
+    renderAt('/explore?view=compare');
+    const wf = await screen.findByRole('list', { name: /Waterfall/ });
+    await user.click(within(wf).getByRole('button', { name: /Food & dining: up ₹8,000/ }));
+    expect(analytics.explainChange).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ category: 'food_dining' }));
+    expect(await screen.findByText('Food & dining rose ₹8,000, mostly from Swiggy.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Which Food & dining merchants changed most/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show all categories' }));
+    expect(analytics.explainChange).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ category: undefined }));
+  });
+
+  it('when the periods are not comparable it says so and gives no narrative, merchants or actions', async () => {
+    const bad = { ...comparison, previous: { ...comparison.previous, total: 1_000_000 }, steps: [], other: 0, comparable: false, note: 'August has no statement for 1-20 Aug.' };
+    analytics.compareSpending.mockReturnValue(bad);
+    analytics.explainChange.mockReturnValue({ comparison: bad, comparable: false, headline: 'Should not show', merchants: [], suggestedAction: undefined });
+    renderAt('/explore?view=compare');
+    expect(await screen.findByText('Incomplete data.')).toBeInTheDocument();
     expect(screen.getAllByText(/August has no statement for 1-20 Aug/).length).toBeGreaterThan(0);
-    expect(screen.queryByText(/You spent .* (more|less) than/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Should not show')).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: /Waterfall/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Try a scenario' })).not.toBeInTheDocument();
   });
 });
 
@@ -263,5 +313,33 @@ describe('Explore: money flow', () => {
     expect(await screen.findByRole('heading', { name: /How did money move between your own accounts/ })).toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent(FLOW_DISCLAIMER);
     expect(screen.getByRole('note')).toHaveTextContent('Only moves between your own accounts');
+  });
+});
+
+describe('Explore: hide amounts', () => {
+  const rupee = /₹\s?[1-9][\d,]*/;
+  it.each(['categories', 'trends', 'compare', 'merchants', 'patterns', 'flow'])('%s view shows no rupee value anywhere when amounts are hidden', async (view) => {
+    const { container } = renderAt(`/explore?view=${view}`, true);
+    await screen.findAllByRole("heading", { level: 2 });
+    expect(container.textContent ?? '').not.toMatch(rupee);
+    const labels = [...container.querySelectorAll('[aria-label]')].map((e) => e.getAttribute('aria-label') ?? '').join(' | ');
+    expect(labels).not.toMatch(rupee);
+  });
+
+  it('shows the real values when amounts are visible (control)', async () => {
+    const { container } = renderAt('/explore?view=categories', false);
+    await screen.findAllByRole("heading", { level: 2 });
+    expect(container.textContent).toMatch(rupee);
+  });
+});
+
+describe('Explore: chart honesty', () => {
+  it('month labels carry the year when the range spans years', async () => {
+    analytics.monthlySeries.mockReturnValue([
+      { month: '2024-12', income: 1, spending: 1, invested: 1, netSavings: 0, complete: false },
+      { month: '2025-01', income: 1, spending: 1, invested: 1, netSavings: 0, complete: true },
+    ]);
+    renderAt('/explore?view=trends');
+    expect(await screen.findByText(/Left out because statements do not cover the whole month: Dec 2024/)).toBeInTheDocument();
   });
 });

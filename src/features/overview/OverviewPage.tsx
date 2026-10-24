@@ -1,13 +1,15 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, ClipboardCheck, GraduationCap } from 'lucide-react';
-import { useBudgets, useLedger, useRecurringDecisions, useSavingActions } from '@/db/hooks';
+import { useBudgets, useRecurringDecisions, useSavingActions } from '@/db/hooks';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
+import { useScopedLedger } from '@/app/scope';
 import { ROUTES, activityLink, exploreLink } from '@/app/routes';
 import {
   applyQuery,
   categoryBaselines,
+  compareSpending,
   cumulativeSpending,
   dataStatus,
   detectRecurring,
@@ -17,7 +19,7 @@ import {
   upcomingCardDues,
   type Insight,
 } from '@/engine/analytics';
-import { monthKey, todayIso } from '@/lib/dates';
+import { daysInMonth, monthKey, todayIso } from '@/lib/dates';
 import { Card, CardHeader, Notice, Skeleton, useToast } from '@/ui';
 import { buildCommitments } from './commitments';
 import { CommitmentTimeline } from './CommitmentTimeline';
@@ -40,7 +42,7 @@ function OverviewSkeleton() {
 }
 
 export default function OverviewPage() {
-  const { ready, accounts, statements, transactions, customCategories } = useLedger();
+  const { ready, accounts, statements, transactions, customCategories } = useScopedLedger();
   const budgets = useBudgets();
   const decisions = useRecurringDecisions();
   const actions = useSavingActions();
@@ -74,6 +76,17 @@ export default function OverviewPage() {
         : null,
     [hasData, transactions, accounts, statements, period.start, period.end, today, planMonthly],
   );
+
+  const comparison = useMemo(
+    () => (hasData ? compareSpending(transactions, { accounts, statements, current: { start: period.start, end: period.end }, today }) : null),
+    [hasData, transactions, accounts, statements, period.start, period.end, today],
+  );
+  // Even-pace marker only while the plan month is still running.
+  const expectedByToday = useMemo(() => {
+    if (!plan || !singleMonth || monthKey(period.start) !== monthKey(today)) return undefined;
+    const [y, m, d] = today.split('-').map(Number);
+    return Math.floor((plan.monthlyLimit * d) / daysInMonth(y, m));
+  }, [plan, singleMonth, period.start, today]);
 
   const insightsReady = hasData && budgets !== undefined && decisions !== undefined && actions !== undefined;
   const insights: Insight[] = useMemo(
@@ -171,7 +184,7 @@ export default function OverviewPage() {
             ) : (
               <div className="grid gap-4 lg:grid-cols-3 lg:items-start">
                 <div className="space-y-4 lg:col-span-2">
-                  <MainSummary summary={summary} status={status} plan={plan} singleMonth={singleMonth} />
+                  <MainSummary summary={summary} status={status} plan={plan} singleMonth={singleMonth} comparison={comparison} expectedByToday={expectedByToday} />
                   <SpendingPlanChart
                     series={series}
                     scope={`${period.label} · ${accountsLabel}`}

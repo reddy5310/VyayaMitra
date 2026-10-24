@@ -3,9 +3,9 @@ import { useSearchParams } from 'react-router-dom';
 import { Download, SearchX } from 'lucide-react';
 import { usePageChrome } from '@/app/chrome';
 import { usePeriod } from '@/app/period';
-import { useLedger } from '@/db/hooks';
+import { useLedger, useRecurringDecisions } from '@/db/hooks';
 import { todayIso } from '@/lib/dates';
-import { applyQuery, summarize } from '@/engine/analytics';
+import { applyQuery, detectRecurring, isSeriesActive, summarize } from '@/engine/analytics';
 import { Button, Card, EmptyState, Money, Notice, SegmentedControl, Skeleton, useToast } from '@/ui';
 import { csvFilename, downloadCsv, transactionsToCsv } from '../reports/csv';
 import { ActivityFilters } from './ActivityFilters';
@@ -53,7 +53,26 @@ export default function ActivityPage() {
   // Deep link with review=1 opens the focused queue; the view can then be switched to the plain list.
   const [reviewView, setReviewView] = useState<'queue' | 'list'>(filters.review ? 'queue' : 'list');
 
-  const query = useMemo(() => buildQuery(filters, period), [filters, period]);
+  const decisions = useRecurringDecisions();
+  const recurringKeys = useMemo(
+    () =>
+      filters.recurring && ledger.ready
+        ? detectRecurring(ledger.transactions, decisions ?? [], todayIso())
+            .filter((s) => s.status !== 'dismissed' && isSeriesActive(s, todayIso()))
+            .map((s) => s.merchantKey)
+        : [],
+    [filters.recurring, ledger.ready, ledger.transactions, decisions],
+  );
+  const merchants = useMemo(() => {
+    const counts = new Map<string, { name: string; n: number }>();
+    for (const t of ledger.transactions) {
+      const c = counts.get(t.merchantKey);
+      if (c) c.n += 1;
+      else counts.set(t.merchantKey, { name: t.merchant, n: 1 });
+    }
+    return [...counts.entries()].sort((a, b) => b[1].n - a[1].n).map(([key, v]) => ({ key, name: v.name }));
+  }, [ledger.transactions]);
+  const query = useMemo(() => buildQuery(filters, period, recurringKeys), [filters, period, recurringKeys]);
   const filtered = useMemo(
     () => (ledger.ready ? applyQuery(ledger.transactions, query) : []),
     [ledger.ready, ledger.transactions, query],
@@ -206,6 +225,8 @@ export default function ActivityPage() {
         filters={filters}
         accounts={ledger.accounts}
         customCategories={ledger.customCategories}
+        merchants={merchants}
+        statements={ledger.statements}
         onChange={update}
         onClearAll={clearAll}
         searchRef={searchRef}
@@ -273,9 +294,9 @@ export default function ActivityPage() {
           ) : (
             <EmptyState
               icon={<SearchX className="h-6 w-6" aria-hidden />}
-              title="Nothing matches"
-              body={hasFilters ? 'Try removing a filter or choosing a longer period.' : 'No transactions in this period. Try a longer period.'}
-              action={hasFilters ? <Button variant="outline" onClick={clearAll}>Clear filters</Button> : undefined}
+              title="No matching results"
+              body={hasFilters ? 'Your filters are still set. Reset them to see everything in this period, or remove one chip.' : 'No transactions in this period. Try a longer period.'}
+              action={hasFilters ? <Button variant="outline" onClick={clearAll}>Reset filters</Button> : undefined}
             />
           )}
         </Card>

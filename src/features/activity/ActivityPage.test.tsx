@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   applyQuery: vi.fn(),
   summarize: vi.fn(),
   reviewPriority: vi.fn(),
+  detectRecurring: vi.fn(),
+  deleteRule: vi.fn(),
   suggestCategories: vi.fn(),
   setTransactionCategory: vi.fn(),
   setTransactionKind: vi.fn(),
@@ -36,11 +38,13 @@ vi.mock('@/db/hooks', () => ({
   useLedger: mocks.useLedger,
   useTransaction: mocks.useTransaction,
   useRules: () => [],
+  useRecurringDecisions: () => [],
   useSettings: () => ({ p2pReviewThreshold: 500_000 }),
 }));
 vi.mock('@/db/actions', () => ({
   setTransactionCategory: mocks.setTransactionCategory,
   setTransactionKind: mocks.setTransactionKind,
+  deleteRule: mocks.deleteRule,
   setTransactionsCategory: mocks.setTransactionsCategory,
   setTransactionsKind: mocks.setTransactionsKind,
   renameMerchant: mocks.renameMerchant,
@@ -48,7 +52,12 @@ vi.mock('@/db/actions', () => ({
   markReviewed: mocks.markReviewed,
   resetTransaction: mocks.resetTransaction,
 }));
-vi.mock('@/engine/analytics', () => ({ applyQuery: mocks.applyQuery, summarize: mocks.summarize }));
+vi.mock('@/engine/analytics', () => ({
+  applyQuery: mocks.applyQuery,
+  summarize: mocks.summarize,
+  detectRecurring: mocks.detectRecurring,
+  isSeriesActive: () => true,
+}));
 vi.mock('@/engine/understand', () => ({ reviewPriority: mocks.reviewPriority, suggestCategories: mocks.suggestCategories }));
 
 import ActivityPage from './ActivityPage';
@@ -97,6 +106,7 @@ beforeEach(() => {
     txns.map((t, i) => ({ txnId: t.id, score: 100 - i, sameMerchantCount: 0, reason: '' })),
   );
   mocks.suggestCategories.mockReturnValue([]);
+  mocks.detectRecurring.mockReturnValue([]);
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -188,6 +198,10 @@ describe('ActivityPage', () => {
     expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
     expect(within(dialog).getByText('2 other transactions match')).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /remember for “swiggy”/i }));
+    // More than one row would change, so they are listed first and nothing is written yet.
+    expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole('group', { name: /rows that will change/i })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Change 3 transactions' }));
 
     expect(mocks.setTransactionCategory).toHaveBeenCalledWith('target', 'shopping', 'merchant');
     expect(await screen.findByText('Updated 3 transactions and remembered for Swiggy')).toBeInTheDocument();
@@ -273,6 +287,7 @@ describe('ActivityPage', () => {
     await user.click(within(group).getByRole('button', { name: /food & dining, 72% likely/i }));
     expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
     await user.click(screen.getByRole('button', { name: /remember for “swiggy”/i }));
+    await user.click(screen.getByRole('button', { name: 'Change 2 transactions' }));
 
     expect(mocks.setTransactionCategory).toHaveBeenCalledWith('a', 'food_dining', 'merchant');
     // The other Swiggy row (b) is skipped past even though the mocked data has not changed.
@@ -292,6 +307,8 @@ describe('ActivityPage', () => {
     expect(screen.getByText(/2 of 3 selected/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /food & dining, 70% likely/i }));
     await user.click(screen.getByRole('button', { name: /apply to these 2 selected/i }));
+    expect(mocks.setTransactionsCategory).not.toHaveBeenCalled(); // previewed first
+    await user.click(screen.getByRole('button', { name: 'Change 2 transactions' }));
 
     expect(mocks.setTransactionsCategory).toHaveBeenCalledWith(['a', 'b'], 'food_dining');
     expect(mocks.setTransactionCategory).not.toHaveBeenCalled();
@@ -317,5 +334,107 @@ describe('ActivityPage', () => {
 
     await user.click(screen.getByRole('radio', { name: 'Confirm categories (1)' }));
     expect(within(screen.getByRole('region', { name: /review transaction/i })).getByText('Chai Point')).toBeInTheDocument();
+  });
+  it('turns the new filters into one LedgerQuery', () => {
+    const rows = [swiggy({ id: 'a' })];
+    mocks.useLedger.mockReturnValue(ledger(rows));
+    mocks.detectRecurring.mockReturnValue([
+      { merchantKey: 'swiggy', status: 'suggested' },
+      { merchantKey: 'gym', status: 'dismissed' },
+    ]);
+    renderPage('/activity?group=transfer&min=1,250&max=5000.50&merchant=swiggy&statement=st1&recurring=1');
+    expect(mocks.applyQuery).toHaveBeenLastCalledWith(
+      rows,
+      expect.objectContaining({
+        kindGroup: 'transfer',
+        minAmount: 125_000,
+        maxAmount: 500_050,
+        merchantKeys: ['swiggy'],
+        statementIds: ['st1'],
+      }),
+    );
+    // Active filters are visible as chips, including the ones in the collapsed "more" area.
+    const chips = screen.getByRole('list', { name: /active filters/i });
+    expect(within(chips).getByText('Money: Transfers')).toBeInTheDocument();
+    expect(within(chips).getByText('Recurring')).toBeInTheDocument();
+  });
+
+  it('recurring alone uses the active, non-dismissed series; none means no rows rather than all', () => {
+    mocks.useLedger.mockReturnValue(ledger([swiggy()]));
+    mocks.detectRecurring.mockReturnValue([]);
+    renderPage('/activity?recurring=1');
+    expect(mocks.applyQuery).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ merchantKeys: [expect.any(String)] }));
+    expect(mocks.applyQuery.mock.lastCall![1].merchantKeys).not.toContain('swiggy');
+  });
+
+  it('picks a merchant by name and keeps the filters when nothing matches, with a Reset', async () => {
+    const user = userEvent.setup();
+    mocks.useLedger.mockReturnValue(ledger([swiggy()]));
+    renderPage('/activity?q=zzz');
+    mocks.applyQuery.mockReturnValue([]);
+    await user.click(screen.getByRole('button', { name: /more filters/i }));
+    await user.type(screen.getByLabelText('Merchant'), 'Swiggy');
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('merchant=swiggy'));
+    await waitFor(() => expect(screen.getByText('No matching results')).toBeInTheDocument());
+    expect(screen.getByRole('list', { name: /active filters/i })).toBeInTheDocument(); // filters still shown
+    await user.click(screen.getByRole('button', { name: 'Reset filters' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).not.toHaveTextContent('merchant='));
+  });
+
+  describe('undo', () => {
+    async function correct(user: ReturnType<typeof userEvent.setup>, target: Transaction, others: Transaction[] = []) {
+      mocks.useLedger.mockReturnValue(ledger([target, ...others]));
+      mocks.useTransaction.mockImplementation((id?: string) => (id === target.id ? target : undefined));
+      renderPage(`/activity?txn=${target.id}`);
+      const dialog = await screen.findByRole('dialog');
+      await user.selectOptions(within(dialog).getByLabelText('Category'), 'shopping');
+      return dialog;
+    }
+
+    it('an automatic decision comes back via resetTransaction', async () => {
+      const user = userEvent.setup();
+      mocks.setTransactionCategory.mockResolvedValue({ updated: 1 });
+      const dialog = await correct(user, swiggy({ id: 'T', categorySource: 'builtin_rule', kindSource: 'rule' }));
+      await user.click(within(dialog).getByRole('button', { name: /apply to this transaction/i }));
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      expect(mocks.resetTransaction).toHaveBeenCalledWith('T');
+      expect(await screen.findByText('Change undone')).toBeInTheDocument();
+    });
+
+    it('an earlier choice of the user is written back as it was', async () => {
+      const user = userEvent.setup();
+      mocks.setTransactionCategory.mockResolvedValue({ updated: 1 });
+      const dialog = await correct(user, swiggy({ id: 'T', category: 'groceries', categorySource: 'user_txn' }));
+      await user.click(within(dialog).getByRole('button', { name: /apply to this transaction/i }));
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      expect(mocks.setTransactionCategory).toHaveBeenLastCalledWith('T', 'groceries', 'this');
+      expect(mocks.resetTransaction).not.toHaveBeenCalled();
+    });
+
+    it('a remembered merchant rule is undone by deleting the rule', async () => {
+      const user = userEvent.setup();
+      mocks.setTransactionCategory.mockResolvedValue({ updated: 1, ruleId: 'rule-9' });
+      const dialog = await correct(user, swiggy({ id: 'T' }));
+      await user.click(within(dialog).getByRole('button', { name: /remember for “swiggy”/i }));
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      expect(mocks.deleteRule).toHaveBeenCalledWith('rule-9');
+    });
+
+    it('selected rows are each restored', async () => {
+      const user = userEvent.setup();
+      const a = swiggy({ id: 'a', needsReview: true, category: 'groceries', categorySource: 'user_txn' });
+      const b = swiggy({ id: 'b', needsReview: true, categorySource: 'builtin_rule', kindSource: 'rule' });
+      mocks.useLedger.mockReturnValue(ledger([a, b]));
+      mocks.suggestCategories.mockReturnValue([{ category: 'shopping', probability: 0.6, source: 'learned', reason: 'x' }]);
+      mocks.setTransactionsCategory.mockResolvedValue({ updated: 2 });
+      mocks.markReviewed.mockResolvedValue(undefined);
+      renderPage('/activity?review=1');
+      await user.click(screen.getByRole('button', { name: /shopping, 60% likely/i }));
+      await user.click(screen.getByRole('button', { name: /apply to these 2 selected/i }));
+      await user.click(screen.getByRole('button', { name: 'Change 2 transactions' }));
+      await user.click(await screen.findByRole('button', { name: 'Undo' }));
+      await waitFor(() => expect(mocks.resetTransaction).toHaveBeenCalledWith('b'));
+      expect(mocks.setTransactionCategory).toHaveBeenCalledWith('a', 'groceries', 'this');
+    });
   });
 });

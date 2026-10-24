@@ -4,10 +4,9 @@ import { activityLink } from '@/app/routes';
 import { CATEGORY_GROUP_LABELS, categoryById, categoryName } from '@/domain/categories';
 import type { CategoryGroup } from '@/domain/types';
 import { summarize } from '@/engine/analytics';
-import { formatINR } from '@/lib/money';
 import { ChartFrame, Money, SegmentedControl, chartColor, cn } from '@/ui';
 import { SeeTransactions, tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt } from './useExploreData';
 
 const GROUP_SLOT: Record<CategoryGroup, number> = {
   essentials: 1,
@@ -32,12 +31,13 @@ interface Slice {
 
 /** Composition donut: plain SVG arcs, so it works without a measured container. */
 function Donut({ slices, total }: { slices: Slice[]; total: number }) {
+  const fmt = useFmt();
   const r = 70;
   const c = 2 * Math.PI * r;
   let offset = 0;
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row">
-      <svg viewBox="0 0 200 200" className="h-48 w-48 shrink-0 -rotate-90" role="img" aria-label={`Spending by broad group, total ${formatINR(total, { whole: true })}`}>
+      <svg viewBox="0 0 200 200" className="h-48 w-48 shrink-0 -rotate-90" role="img" aria-label={`Spending by broad group, total ${fmt(total, { whole: true })}`}>
         {slices.map((s) => {
           const len = s.share * c;
           const el = <circle key={s.key} cx="100" cy="100" r={r} fill="none" stroke={s.color} strokeWidth="34" strokeDasharray={`${len} ${c - len}`} strokeDashoffset={-offset} />;
@@ -63,6 +63,7 @@ function Donut({ slices, total }: { slices: Slice[]; total: number }) {
 }
 
 export default function CategoriesView() {
+  const fmt = useFmt();
   const { accounts, statements, customCategories, period, today, scope, periodTxns } = useExploreData();
   const [params] = useSearchParams();
   const focus = params.get('category') ?? undefined;
@@ -85,7 +86,7 @@ export default function CategoriesView() {
   );
   const top = rows[0];
   const takeaway = top
-    ? `${categoryName(top.category, customCategories)} took the most: ${formatINR(top.amount, { whole: true })}, ${Math.round(top.share * 100)}% of ${formatINR(total, { whole: true })} spent.`
+    ? `${categoryName(top.category, customCategories)} took the most: ${fmt(top.amount, { whole: true })}, ${Math.round(top.share * 100)}% of ${fmt(total, { whole: true })} spent.`
     : undefined;
   const incomplete = !summary.coverage.complete;
 
@@ -126,7 +127,7 @@ export default function CategoriesView() {
                     {categoryName(r.category, customCategories)}
                   </Link>
                 </td>
-                <td className={tableNum}>{formatINR(r.amount)}</td>
+                <td className={tableNum}>{fmt(r.amount)}</td>
                 <td className={tableNum}>{Math.round(r.share * 100)}%</td>
                 <td className={tableNum}>{r.count}</td>
               </tr>
@@ -145,7 +146,7 @@ export default function CategoriesView() {
                 <Link
                   to={activityLink({ category: r.category })}
                   aria-current={isFocus ? 'true' : undefined}
-                  aria-label={`${def.name}: ${formatINR(r.amount, { whole: true })}, ${Math.round(r.share * 100)}% of spending. See transactions`}
+                  aria-label={`${def.name}: ${fmt(r.amount, { whole: true })}, ${Math.round(r.share * 100)}% of spending. See transactions`}
                   className={cn('block rounded-xl px-2 py-1.5 hover:bg-surface-2 focus-visible:outline focus-visible:outline-2', isFocus && 'bg-primary-soft')}
                 >
                   <span className="flex items-baseline justify-between gap-2 text-sm">

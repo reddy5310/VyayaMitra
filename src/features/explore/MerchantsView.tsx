@@ -4,14 +4,15 @@ import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, 
 import { activityLink } from '@/app/routes';
 import { categoryById, categoryName } from '@/domain/categories';
 import { applyQuery, merchantPareto } from '@/engine/analytics';
-import { formatINR } from '@/lib/money';
 import { ChartFrame, Money, SegmentedControl, chartColor, cn } from '@/ui';
 import { tableCell, tableHead, tableNum } from './shared';
-import { useExploreData } from './useExploreData';
+import { useExploreData, useFmt, useHideAmounts } from './useExploreData';
 
 const LIMIT = 30;
 
 export default function MerchantsView() {
+  const fmt = useFmt();
+  const hidden = useHideAmounts();
   const { periodTxns, customCategories, period, scope } = useExploreData();
   const [mode, setMode] = useState<'list' | 'pareto'>('list');
 
@@ -20,7 +21,7 @@ export default function MerchantsView() {
   const { rows, merchantsFor80, total } = pareto;
   const takeaway =
     rows.length > 0
-      ? `${merchantsFor80} merchant${merchantsFor80 === 1 ? '' : 's'} make up 80% of the ${formatINR(total, { whole: true })} you spent with merchants.`
+      ? `${merchantsFor80} merchant${merchantsFor80 === 1 ? '' : 's'} make up 80% of the ${fmt(total, { whole: true })} you spent with merchants.`
       : undefined;
   const rowLink = (m: (typeof rows)[number]) => (m.txnIds.length > 0 && m.txnIds.length <= 25 ? activityLink({ ids: m.txnIds }) : activityLink({ q: m.merchant }));
   const chartData = rows.slice(0, 15).map((r, i) => ({ n: i + 1, name: r.merchant, spent: r.total, cumulative: Math.round(r.cumulativeShare * 100) }));
@@ -62,7 +63,7 @@ export default function MerchantsView() {
                     {r.merchant}
                   </Link>
                 </td>
-                <td className={tableNum}>{formatINR(r.total)}</td>
+                <td className={tableNum}>{fmt(r.total)}</td>
                 <td className={tableNum}>{r.count}</td>
                 <td className={tableNum}>{Math.round(r.cumulativeShare * 100)}%</td>
               </tr>
@@ -79,7 +80,7 @@ export default function MerchantsView() {
               <li key={r.merchantKey}>
                 <Link
                   to={rowLink(r)}
-                  aria-label={`${i + 1}. ${r.merchant}: ${formatINR(r.total, { whole: true })} over ${r.count} payments, cumulative ${Math.round(r.cumulativeShare * 100)}%. See transactions`}
+                  aria-label={`${i + 1}. ${r.merchant}: ${fmt(r.total, { whole: true })} over ${r.count} payments, cumulative ${Math.round(r.cumulativeShare * 100)}%. See transactions`}
                   className="flex min-h-touch items-center gap-3 px-1 py-2 hover:bg-surface-2 focus-visible:outline focus-visible:outline-2"
                 >
                   <span className="w-6 shrink-0 text-right text-sm tabular-nums text-fg-muted">{i + 1}</span>
@@ -109,9 +110,9 @@ export default function MerchantsView() {
             <ComposedChart data={chartData} margin={{ left: 0, right: 8, top: 8 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgb(var(--border))" />
               <XAxis dataKey="n" tickLine={false} label={{ value: 'Merchant rank', position: 'insideBottom', offset: -2 }} height={36} />
-              <YAxis yAxisId="amt" tickFormatter={(v: number) => formatINR(v, { compact: true })} width={56} tickLine={false} axisLine={false} />
+              <YAxis yAxisId="amt" tickFormatter={(v: number) => (hidden ? '••••' : fmt(v, { compact: true }))} width={56} tickLine={false} axisLine={false} />
               <YAxis yAxisId="pct" orientation="right" domain={[0, 100]} tickFormatter={(v: number) => `${v}%`} width={40} tickLine={false} axisLine={false} />
-              <Tooltip formatter={(v: number, name: string) => (name === 'Cumulative' ? [`${v}%`, name] : [formatINR(v), name])} labelFormatter={(n: number) => chartData[n - 1]?.name ?? ''} />
+              <Tooltip formatter={(v: number, name: string) => (name === 'Cumulative' ? [`${v}%`, name] : [fmt(v), name])} labelFormatter={(n: number) => chartData[n - 1]?.name ?? ''} />
               <Bar yAxisId="amt" dataKey="spent" name="Spent" fill={chartColor(categoryById('shopping').colorIndex)} radius={[4, 4, 0, 0]} />
               <Line yAxisId="pct" dataKey="cumulative" name="Cumulative" stroke={chartColor(categoryById('salary').colorIndex)} strokeWidth={2} dot />
             </ComposedChart>

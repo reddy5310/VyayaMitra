@@ -2,11 +2,13 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { categoryName } from '@/domain/categories';
 import { KIND_LABELS } from '@/domain/kinds';
-import type { Account, RowWarning } from '@/domain/types';
+import type { Account, RowWarning, Statement, Transaction } from '@/domain/types';
 import type { CommitChoices, ImportPreview, PreviewRow } from '@/engine/import';
 import { formatDate } from '@/lib/dates';
 import { Badge, Button, Card, CardHeader, Money, Notice, SegmentedControl, Spinner, type Tone } from '@/ui';
 import type { AccountTarget } from './AccountStep';
+import { DuplicateRows, TransferHints, UncertainRows } from './ImpactSections';
+import { findTransferCandidates, isUncertain } from './candidates';
 import { FormatNotices } from './FormatNotices';
 import type { Via } from './importTypes';
 
@@ -96,6 +98,8 @@ export function ReviewStep({
   via,
   templateName,
   onTeach,
+  existing,
+  statements,
   onConfirm,
   onBack,
   onCancel,
@@ -106,6 +110,9 @@ export function ReviewStep({
   committing: boolean;
   commitError: string | null;
   via: Via;
+  /** The ledger as it is now: used to show what a duplicate matched and which rows may be the other leg of a transfer. */
+  existing: readonly Transaction[];
+  statements: readonly Statement[];
   /** Name of the stored template that was used, when known. */
   templateName?: string;
   /** Opens the "teach this format" screen. Omit to hide every teach offer. */
@@ -121,15 +128,48 @@ export function ReviewStep({
   const [visible, setVisible] = useState(PAGE);
   const [showSkipped, setShowSkipped] = useState(false);
   const [rowFilter, setRowFilter] = useState<RowFilter>('all');
+  const [accepted, setAccepted] = useState<ReadonlySet<number>>(new Set());
+  const [keepBoth, setKeepBoth] = useState<ReadonlySet<number>>(new Set());
 
   const replacing = mode === 'replace' && Boolean(preview.alreadyImported);
   /** In "add" mode a duplicate is always skipped by the importer, so it is locked off. */
-  const locked = (r: PreviewRow) => !replacing && r.duplicateOf !== undefined;
+  const locked = (r: PreviewRow) => !replacing && r.duplicateOf !== undefined && !keepBoth.has(r.index);
   const included = (r: PreviewRow) => !locked(r) && !excluded.has(r.index);
   const includedCount = useMemo(
-    () => preview.rows.filter((r) => (replacing || r.duplicateOf === undefined) && !excluded.has(r.index)).length,
-    [preview.rows, excluded, replacing],
+    () => preview.rows.filter((r) => (replacing || r.duplicateOf === undefined || keepBoth.has(r.index)) && !excluded.has(r.index)).length,
+    [preview.rows, excluded, replacing, keepBoth],
   );
+
+  // Doubtful amounts must be answered one by one; the biggest money first.
+  const uncertain = useMemo(
+    () => preview.rows.filter((r) => isUncertain(r) && (replacing || r.duplicateOf === undefined || keepBoth.has(r.index))).sort((a, b) => b.row.amount - a.row.amount),
+    [preview.rows, replacing, keepBoth],
+  );
+  const unresolved = uncertain.filter((r) => !accepted.has(r.index) && !excluded.has(r.index)).length;
+  const existingById = useMemo(() => new Map(existing.map((t) => [t.id, t])), [existing]);
+  const targetAccountId = 'accountId' in target ? target.accountId : undefined;
+  const targetType = 'accountId' in target ? accounts.find((a) => a.id === target.accountId)?.type : target.newAccount.type;
+  const transferHints = useMemo(
+    () => findTransferCandidates(preview.rows.filter((r) => !excluded.has(r.index)), targetAccountId, existing, accounts, targetType),
+    [preview.rows, excluded, targetAccountId, existing, accounts, targetType],
+  );
+
+  const accept = (index: number) => {
+    setAccepted((prev) => new Set(prev).add(index));
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+  };
+  const exclude = (index: number) => {
+    setExcluded((prev) => new Set(prev).add(index));
+    setAccepted((prev) => {
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+  };
 
   const debitCount = parsed.rows.filter((r) => r.direction === 'debit').length;
   const creditCount = parsed.rows.length - debitCount;
@@ -148,11 +188,14 @@ export function ReviewStep({
   function confirm() {
     const excludeRowIndexes = preview.rows.filter((r) => !locked(r) && excluded.has(r.index)).map((r) => r.index);
     const base: CommitChoices = 'accountId' in target ? { accountId: target.accountId, mode: 'add' } : { newAccount: target.newAccount, mode: 'add' };
-    onConfirm(
+    // Rows the user chose to keep although they match an existing transaction.
+    const keepDuplicateIndexes = replacing ? [] : [...keepBoth].filter((i) => !excluded.has(i));
+    const choices: CommitChoices & { keepDuplicateIndexes?: number[] } =
       replacing && preview.alreadyImported
         ? { ...base, mode: 'replace', replaceStatementId: preview.alreadyImported.statementId, excludeRowIndexes }
-        : { ...base, excludeRowIndexes },
-    );
+        : { ...base, excludeRowIndexes };
+    if (keepDuplicateIndexes.length > 0) choices.keepDuplicateIndexes = keepDuplicateIndexes;
+    onConfirm(choices);
   }
 
   const amountRows = useMemo(() => preview.rows.filter(hasAmountIssue), [preview.rows]);
@@ -278,6 +321,25 @@ export function ReviewStep({
         </Card>
       )}
 
+      <UncertainRows rows={uncertain} accepted={accepted} excluded={excluded} onAccept={accept} onExclude={exclude} />
+      {!replacing && (
+        <DuplicateRows
+          rows={preview.rows}
+          existing={existingById}
+          statements={statements}
+          keepBoth={keepBoth}
+          onKeep={(i, keep) =>
+            setKeepBoth((prev) => {
+              const next = new Set(prev);
+              if (keep) next.add(i);
+              else next.delete(i);
+              return next;
+            })
+          }
+        />
+      )}
+      <TransferHints items={transferHints} targetName={accountName} />
+
       <section aria-label="Rows to import">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-fg">
@@ -364,7 +426,7 @@ export function ReviewStep({
       </section>
 
       <div className="sticky bottom-0 -mx-4 flex flex-wrap items-center gap-2 border-t border-border bg-bg/95 px-4 py-3 backdrop-blur pb-safe">
-        <Button onClick={confirm} loading={committing} disabled={includedCount === 0}>
+        <Button onClick={confirm} loading={committing} disabled={includedCount === 0 || unresolved > 0}>
           {actionLabel}
         </Button>
         <Button variant="outline" onClick={onBack} disabled={committing}>
@@ -373,7 +435,12 @@ export function ReviewStep({
         <Button variant="ghost" onClick={onCancel} disabled={committing}>
           Cancel
         </Button>
-        {includedCount === 0 && !committing && <span className="text-sm text-fg-muted">Nothing new to import.</span>}
+        {unresolved > 0 && !committing && (
+          <span className="text-sm text-warning">
+            Answer {unresolved} doubtful amount{unresolved === 1 ? '' : 's'} above first.
+          </span>
+        )}
+        {includedCount === 0 && unresolved === 0 && !committing && <span className="text-sm text-fg-muted">Nothing new to import.</span>}
       </div>
     </div>
   );

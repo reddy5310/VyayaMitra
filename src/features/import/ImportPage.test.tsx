@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ParsedRow, TemplateDraft } from '@/domain/types';
 import type { StatementInspection } from '@/parsing';
 import type { ImportPreview, ImportResult, PreviewRow } from '@/engine/import';
-import { makeAccount } from '../activity/testUtils';
+import { makeAccount, makeStatement, makeTxn } from '../activity/testUtils';
 
 const mocks = vi.hoisted(() => ({
   useAccounts: vi.fn(),
+  useLedger: vi.fn(),
   setCustom: vi.fn(),
   prepareImport: vi.fn(),
   retargetPreview: vi.fn(),
@@ -18,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   saveTemplate: vi.fn(),
 }));
 
-vi.mock('@/db/hooks', () => ({ useAccounts: mocks.useAccounts }));
+vi.mock('@/db/hooks', () => ({ useAccounts: mocks.useAccounts, useLedger: mocks.useLedger }));
 vi.mock('@/db/learning', () => ({ useTemplates: () => [], saveTemplate: mocks.saveTemplate }));
 vi.mock('@/app/period', () => ({
   usePeriod: () => ({ setCustom: mocks.setCustom }),
@@ -130,6 +131,7 @@ async function pick(user: ReturnType<typeof userEvent.setup>, file = pdf()) {
 }
 
 beforeEach(() => {
+  mocks.useLedger.mockReturnValue({ ready: true, accounts: [], statements: [], transactions: [], customCategories: [] });
   mocks.useAccounts.mockReturnValue([makeAccount({ id: 'acc1', name: 'Demo Savings ••1234' })]);
 });
 afterEach(() => vi.clearAllMocks());
@@ -583,6 +585,98 @@ describe('ImportPage', () => {
       expect(screen.queryByRole('checkbox', { name: /Merchant 0/ })).not.toBeInTheDocument();
       await user.click(screen.getByRole('radio', { name: 'All (3)' }));
       expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    });
+  });
+
+  describe('review by impact', () => {
+    const withRows = (edit: (rows: PreviewRow[]) => PreviewRow[]) => {
+      const base = makePreview();
+      return { ...base, rows: edit(base.rows.map((r) => ({ ...r }))) };
+    };
+    const toReview = async (user: ReturnType<typeof userEvent.setup>) => {
+      await pick(user);
+      await user.click(await screen.findByRole('button', { name: /continue to review/i }));
+    };
+    const doubtful = () =>
+      withRows((rows) => {
+        rows[0] = {
+          ...rows[0],
+          row: { ...rows[0].row, warnings: ['balance_break'], source: { page: 2, lineStart: 4, lineEnd: 5, rawLines: ['12-09-2025 UPI/DEMO 250.00 9,750.00', 'MART'] } },
+        };
+        rows[2] = { ...rows[2], row: { ...rows[2].row, warnings: ['ambiguous_amount'] } };
+        return rows;
+      });
+
+    it('will not enable Import until every doubtful amount is accepted or excluded, and shows the raw lines', async () => {
+      const user = userEvent.setup();
+      mocks.prepareImport.mockResolvedValue(doubtful());
+      mocks.commitImport.mockResolvedValue(RESULT);
+      renderPage();
+      await toReview(user);
+
+      const section = await screen.findByRole('region', { name: 'Amounts to resolve' });
+      expect(within(section).getByLabelText(/Statement lines for Merchant 0/)).toHaveTextContent('12-09-2025 UPI/DEMO 250.00 9,750.00');
+      expect(screen.getByRole('button', { name: /import 2 transactions/i })).toBeDisabled();
+      expect(screen.getByText(/Answer 2 doubtful amounts above first/)).toBeInTheDocument();
+
+      const first = within(section).getByRole('group', { name: /Decide for Merchant 2/ }); // largest first
+      await user.click(within(first).getByRole('button', { name: 'Accept as printed' }));
+      expect(screen.getByRole('button', { name: /import 2 transactions/i })).toBeDisabled(); // one still open
+      const second = within(section).getByRole('group', { name: /Decide for Merchant 0/ });
+      await user.click(within(second).getByRole('button', { name: 'Exclude' }));
+
+      const importButton = screen.getByRole('button', { name: /import 1 transaction/i });
+      expect(importButton).toBeEnabled();
+      await user.click(importButton);
+      await waitFor(() => expect(mocks.commitImport).toHaveBeenCalled());
+      expect(mocks.commitImport.mock.calls[0][1]).toEqual(expect.objectContaining({ excludeRowIndexes: [0] }));
+    });
+
+    it('shows a duplicate beside the transaction it matched and lets the user keep both', async () => {
+      const user = userEvent.setup();
+      mocks.useLedger.mockReturnValue({
+        ready: true,
+        accounts: [],
+        statements: [makeStatement({ id: 'old-st', fileName: 'earlier.pdf' })],
+        transactions: [makeTxn({ id: 'old1', statementId: 'old-st', rawDescription: 'EARLIER COPY OF THE ROW', amount: 25_000 })],
+        customCategories: [],
+      });
+      mocks.prepareImport.mockResolvedValue(makePreview());
+      mocks.commitImport.mockResolvedValue(RESULT);
+      renderPage();
+      await toReview(user);
+
+      const section = await screen.findByRole('region', { name: 'Possible duplicates' });
+      expect(within(section).getByText('Already imported')).toBeInTheDocument();
+      expect(within(section).getByText('EARLIER COPY OF THE ROW')).toBeInTheDocument();
+      expect(within(section).getByText('From earlier.pdf')).toBeInTheDocument();
+      expect(screen.getByText('2 of 3 rows will be imported')).toBeInTheDocument();
+
+      await user.click(within(section).getByRole('button', { name: 'Keep both' }));
+      expect(screen.getByText('3 of 3 rows will be imported')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /import 3 transactions/i }));
+      await waitFor(() => expect(mocks.commitImport).toHaveBeenCalled());
+      expect(mocks.commitImport.mock.calls[0][1]).toEqual(expect.objectContaining({ keepDuplicateIndexes: [1] }));
+    });
+
+    it('shows both legs of a possible card repayment and explains the pairing', async () => {
+      const user = userEvent.setup();
+      const card = makeAccount({ id: 'card9', name: 'Demo Card', type: 'credit_card' });
+      mocks.useAccounts.mockReturnValue([makeAccount({ id: 'acc1', name: 'Demo Savings ••1234' }), card]);
+      mocks.useLedger.mockReturnValue({
+        ready: true,
+        accounts: [card],
+        statements: [],
+        transactions: [makeTxn({ id: 'leg', accountId: 'card9', amount: 25_000, direction: 'credit', date: '2025-09-14' })],
+        customCategories: [],
+      });
+      mocks.prepareImport.mockResolvedValue(makePreview());
+      renderPage();
+      await toReview(user);
+
+      const section = await screen.findByRole('region', { name: 'Possible transfers' });
+      expect(within(section).getByText('Demo Card')).toBeInTheDocument();
+      expect(within(section).getByText(/Looks like a card bill payment: same amount, opposite direction, 2 days apart/)).toBeInTheDocument();
     });
   });
 });
