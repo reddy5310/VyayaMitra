@@ -55,6 +55,7 @@ const ROUTE_TITLES: Record<string, string> = {
   [ROUTES.settings]: 'Settings',
   [ROUTES.learning]: 'Learning centre',
   [ROUTES.report]: 'Report',
+  [ROUTES.review]: 'Month-end review',
 };
 
 const BASE = import.meta.env.BASE_URL;
