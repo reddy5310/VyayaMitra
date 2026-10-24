@@ -1,0 +1,117 @@
+/**
+ * The on-device ledger database (IndexedDB via Dexie).
+ *
+ * ── Schema versioning ────────────────────────────────────────────────────────
+ * Dexie only needs the *indexed* properties in `stores()`; every other property is stored as-is.
+ * To change the schema in a future release NEVER edit an existing `version(n)`. Append a new version that
+ * repeats ONLY the tables that changed, and add an `.upgrade()` when existing rows must be rewritten:
+ *
+ *   this.version(3)
+ *     .stores({ transactions: 'id, accountId, statementId, date, linkId, merchantKey, &[accountId+fingerprint], kind' })
+ *     .upgrade(async (tx) => {
+ *       await tx.table('transactions').toCollection().modify((t) => { t.someNewField ??= 'default'; });
+ *     });
+ *
+ * Then bump DB_SCHEMA_VERSION (it is written into backups) and teach `migrateBackupData` in
+ * backup.ts how to lift a version-(n-1) backup to version n. Upgrades run inside a single
+ * versionchange transaction, so a failing upgrade leaves the previous version untouched.
+ */
+import Dexie, { type Table } from 'dexie';
+import type {
+  Account,
+  Budget,
+  CustomCategory,
+  FeedbackEvent,
+  GoalContribution,
+  RecurringDecision,
+  SavingAction,
+  SavingsGoal,
+  Statement,
+  StatementTemplate,
+  Transaction,
+  UserRule,
+} from '@/domain/types';
+
+/** Version of the stored/backup data layout. Bump together with a new Dexie `version(n)`. */
+export const DB_SCHEMA_VERSION = 2;
+export const APP_VERSION = '1.1.0';
+
+/** Key/value store: `settings` (AppSettings) and `learnedModel` (opaque JSON from the understand module). */
+export interface MetaRecord {
+  key: string;
+  value: unknown;
+}
+
+export const META_SETTINGS = 'settings';
+export const META_LEARNED_MODEL = 'learnedModel';
+/** Per-source accuracy derived from the feedback table (see engine/understand buildCalibration). */
+export const META_CALIBRATION = 'calibration';
+/** Migration log written by upgrade(): `{ version, at }[]`. */
+export const META_MIGRATIONS = 'migrations';
+
+export class VyayaMitraDB extends Dexie {
+  accounts!: Table<Account, string>;
+  statements!: Table<Statement, string>;
+  transactions!: Table<Transaction, string>;
+  rules!: Table<UserRule, string>;
+  customCategories!: Table<CustomCategory, string>;
+  budgets!: Table<Budget, string>;
+  goals!: Table<SavingsGoal, string>;
+  goalContributions!: Table<GoalContribution, string>;
+  recurringDecisions!: Table<RecurringDecision, string>;
+  savingActions!: Table<SavingAction, string>;
+  templates!: Table<StatementTemplate, string>;
+  feedback!: Table<FeedbackEvent, string>;
+  meta!: Table<MetaRecord, string>;
+
+  constructor(name = 'vyayamitra') {
+    super(name);
+    this.version(1).stores({
+      accounts: 'id',
+      statements: 'id, accountId, fileHash',
+      // The unique compound index is the last line of defence against duplicate rows:
+      // inserting the same (account, fingerprint) twice aborts the whole transaction.
+      transactions: 'id, accountId, statementId, date, linkId, merchantKey, &[accountId+fingerprint]',
+      rules: 'id',
+      customCategories: 'id',
+      budgets: 'id, &category',
+      goals: 'id',
+      goalContributions: 'id, goalId',
+      recurringDecisions: 'merchantKey',
+      savingActions: 'id',
+      meta: 'key',
+    });
+    // v2 — self-training: learned statement formats and the user's correction history.
+    // Existing tables are untouched; Dexie carries all v1 rows across. The upgrade only records the
+    // migration so support/debug tooling can see when a device crossed it.
+    this.version(2)
+      .stores({
+        templates: 'id, [institution+fileKind], source',
+        feedback: 'id, txnId, merchantKey, at',
+      })
+      .upgrade(async (tx) => {
+        const meta = tx.table<MetaRecord, string>('meta');
+        const log = ((await meta.get(META_MIGRATIONS))?.value as { version: number; at: string }[] | undefined) ?? [];
+        await meta.put({ key: META_MIGRATIONS, value: [...log, { version: 2, at: new Date().toISOString() }] });
+      });
+  }
+}
+
+export const db = new VyayaMitraDB();
+
+/** Run `fn` in ONE read-write transaction spanning every table. Any throw rolls everything back. */
+export function writeAll<T>(fn: () => Promise<T>): Promise<T> {
+  return db.transaction('rw', db.tables, fn);
+}
+
+/** Run `fn` in one read-only snapshot spanning every table. */
+export function readAll<T>(fn: () => Promise<T>): Promise<T> {
+  return db.transaction('r', db.tables, fn);
+}
+
+/** Test helper: drop and recreate the database so each test starts empty. */
+export async function resetDatabaseForTests(): Promise<void> {
+  db.close();
+  await db.delete();
+  await db.open();
+}

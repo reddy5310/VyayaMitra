@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en-IN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="VyayaMitra: a private, on-device spending and savings companion for Indian bank and credit-card statements." />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111722" media="(prefers-color-scheme: dark)" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="VyayaMitra" />
+    <link rel="icon" href="./favicon.ico" sizes="48x48" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" sizes="any" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon-180x180.png" />
+    <title>VyayaMitra</title>
+    <script>
+      // Apply the theme before first paint (no flash). Preference: 'system' | 'light' | 'dark'.
+      (function () {
+        try {
+          var pref = localStorage.getItem('vm-theme') || 'system';
+          var dark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>VyayaMitra needs JavaScript to read your statements on this device.</noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

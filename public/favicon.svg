@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="VyayaMitra">
+  <rect width="512" height="512" rx="112" fill="#0f766e"/>
+  <path d="M146 146 L256 372 L366 146" fill="none" stroke="#ffffff" stroke-width="58" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="204" r="38" fill="#fcd34d"/>
+  <path d="M241 192h30M241 205h30M247 192c13 0 20 5 20 12s-7 12-20 12l24 24" fill="none" stroke="#0f766e" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 -5)"/>
+</svg>

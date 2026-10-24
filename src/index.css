@@ -1,0 +1,197 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Design tokens. Channels are "R G B" so Tailwind can apply alpha: bg-primary/10.
+ * Every text/background pair used by the UI primitives is >= 4.5:1 in both themes, and
+ * --border-strong (form-control outlines, switch tracks) is >= 3:1 against surfaces.
+ * Light is the default; dark applies via [data-theme="dark"] which the pre-paint
+ * script in index.html sets from the stored preference or the OS setting.
+ */
+:root {
+  color-scheme: light;
+  --bg: 247 248 250;
+  --surface: 255 255 255;
+  --surface-2: 241 243 246;
+  --surface-3: 229 232 237;
+  --border: 226 229 234;
+  --border-strong: 139 148 162;
+  --fg: 17 24 39;
+  --fg-muted: 75 85 99;
+  --fg-subtle: 94 102 118;
+  --primary: 15 118 110;
+  --primary-fg: 255 255 255;
+  --primary-soft: 212 240 236;
+  --positive: 20 116 55;
+  --positive-soft: 222 247 232;
+  --negative: 185 28 28;
+  --negative-fg: 255 255 255;
+  --negative-soft: 254 226 226;
+  --warning: 161 72 6;
+  --warning-soft: 254 243 199;
+  --info: 29 78 216;
+  --info-soft: 219 234 254;
+  --focus: 13 148 136;
+
+  /* Chart palette (categorical) — readable on light surfaces. */
+  --chart-1: 15 118 110;
+  --chart-2: 37 99 235;
+  --chart-3: 217 119 6;
+  --chart-4: 190 24 93;
+  --chart-5: 124 58 237;
+  --chart-6: 22 163 74;
+  --chart-7: 220 38 38;
+  --chart-8: 8 145 178;
+  --chart-9: 202 138 4;
+  --chart-10: 100 116 139;
+  --chart-grid: 229 232 237;
+  --chart-axis: 94 102 118;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: 9 13 22;
+  --surface: 17 23 34;
+  --surface-2: 24 31 45;
+  --surface-3: 34 43 59;
+  --border: 37 46 62;
+  --border-strong: 104 117 141;
+  --fg: 236 239 244;
+  --fg-muted: 168 177 191;
+  --fg-subtle: 128 138 155;
+  --primary: 45 212 191;
+  --primary-fg: 4 47 46;
+  --primary-soft: 19 64 62;
+  --positive: 74 222 128;
+  --positive-soft: 20 54 36;
+  --negative: 248 113 113;
+  --negative-fg: 40 6 6;
+  --negative-soft: 69 26 26;
+  --warning: 251 191 36;
+  --warning-soft: 66 46 10;
+  --info: 96 165 250;
+  --info-soft: 23 42 77;
+  --focus: 45 212 191;
+
+  --chart-1: 45 212 191;
+  --chart-2: 96 165 250;
+  --chart-3: 251 191 36;
+  --chart-4: 244 114 182;
+  --chart-5: 167 139 250;
+  --chart-6: 74 222 128;
+  --chart-7: 248 113 113;
+  --chart-8: 34 211 238;
+  --chart-9: 250 204 21;
+  --chart-10: 148 163 184;
+  --chart-grid: 37 46 62;
+  --chart-axis: 128 138 155;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+    scroll-padding-top: 5rem;
+  }
+  body {
+    @apply bg-bg text-fg antialiased;
+    font-feature-settings: 'tnum' 1, 'cv11' 1;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.01em;
+  }
+  :focus-visible {
+    outline: 2px solid rgb(var(--focus));
+    outline-offset: 2px;
+  }
+  dialog {
+    color: inherit;
+  }
+  dialog::backdrop {
+    background: rgb(2 6 15 / 0.5);
+  }
+  dialog[open] {
+    animation: vm-sheet-in 0.2s ease-out;
+  }
+  dialog[open]::backdrop {
+    animation: vm-fade-in 0.2s ease-out;
+  }
+  ::selection {
+    background: rgb(var(--primary) / 0.25);
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .pb-safe {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .pt-safe {
+    padding-top: env(safe-area-inset-top);
+  }
+  .pl-safe {
+    padding-left: env(safe-area-inset-left);
+  }
+  .pr-safe {
+    padding-right: env(safe-area-inset-right);
+  }
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes vm-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vm-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes vm-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  [data-print-hide] {
+    display: none !important;
+  }
+}
